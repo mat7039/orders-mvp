@@ -1,1 +1,18 @@
+{
+  "name": "orders-web",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "postinstall": "node -e \"const fs=require('fs'); const path=require('path'); const src=path.join('node_modules','pdfjs-dist','build','pdf.worker.min.js'); const dst=path.join('public','pdf.worker.min.js'); if(fs.existsSync(src)){ fs.mkdirSync('public',{recursive:true}); fs.copyFileSync(src,dst); console.log('Copied pdf.worker to public/'); } else { console.log('pdf.worker not found at',src); }\""
+  },
+  "dependencies": {
+    "next": "14.2.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "pdfjs-dist": "4.4.168"
+  }
+}
 
