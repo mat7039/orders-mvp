@@ -5,8 +5,7 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
-    "start": "next start -p 3000",
-    "postinstall": "node -e \"const fs=require('fs'); const path=require('path'); const src=path.join('node_modules','pdfjs-dist','build','pdf.worker.min.js'); const dst=path.join('public','pdf.worker.min.js'); if(fs.existsSync(src)){ fs.mkdirSync('public',{recursive:true}); fs.copyFileSync(src,dst); console.log('Copied pdf.worker to public/'); } else { console.log('pdf.worker not found at',src); }\""
+    "start": "next start -p 3000"
   },
   "dependencies": {
     "next": "14.2.5",
