@@ -1,1 +1,45 @@
+version: "3.8"
+
+services:
+  api:
+    container_name: orders_api
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    environment:
+      MSSQL_SERVER: "metrix-sql"
+      MSSQL_PORT: "1433"
+      MSSQL_DB: "CDNXL_METRIXM"
+      MSSQL_USER: "amada"
+      MSSQL_PASSWORD: "<TU_WPISZ_HASLO_SQL>"
+      MSSQL_TABLE: "dbo.krakowiakZamowienian8n"
+      MSSQL_PK: "Rid"   # np. Id
+
+      SOURCEQUOTE_COLUMN: "sourceQuote"
+      PDF_URL_COLUMN: "pdf_web_url"
+      STATUS_COLUMN: "Status"
+      CLIENT_COLUMN: ""                # zostaw puste na start
+
+      PDF_MAX_BYTES: "52428800"
+      PDF_PROXY_TIMEOUT_SECONDS: "30"
+
+      ALLOWED_ORIGINS: "*"
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  web:
+    container_name: orders_web
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: "http://<IP_WINDOWS_SERVER>:8000"
+      NEXT_PUBLIC_PAGE_SIZE: "50"
+      NEXT_PUBLIC_PDF_MAX_SCAN_PAGES: "50"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
 
