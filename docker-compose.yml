@@ -1,0 +1,49 @@
+version: "3.8"
+
+services:
+  api:
+    container_name: orders_api
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # ---- MSSQL ----
+      MSSQL_SERVER: "metrix-sql"
+      MSSQL_PORT: "1433"
+      MSSQL_DB: "CDNXL_METRIXM"
+      MSSQL_USER: "amada"
+      MSSQL_PASSWORD: "${MSSQL_PASSWORD}"
+      MSSQL_TABLE: "dbo.krakowiakZamowienian8n"
+      MSSQL_PK: "Id"   # np. "Id"
+
+      # ---- Kolumny biznesowe (domyślne) ----
+      SOURCEQUOTE_COLUMN: "sourceQuote"
+      PDF_URL_COLUMN: "pdfWebUrl"
+      STATUS_COLUMN: "Status"
+      CLIENT_COLUMN: "Klient"          # jeśli nie masz takiej kolumny, później zmienimy albo wyłączymy filtr
+
+      # ---- API ----
+      # Dla prostoty w MVP pozwalamy na CORS z dowolnego hosta
+      CORS_ALLOW_ORIGINS: "*"
+
+      # Limit skanowania stron pod highlight (wariant A)
+      PDF_MAX_PAGES_SCAN: "50"
+
+    # Jeśli MSSQL jest poza dockerem, depends_on nie ma znaczenia — zostawiamy bez.
+    restart: unless-stopped
+
+  web:
+    container_name: orders_web
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      # MUSI być adres dostępny z Twojej przeglądarki, a nie nazwa kontenera.
+      NEXT_PUBLIC_API_URL: "http://metrix-sql:8000"
+    depends_on:
+      - api
+    restart: unless-stopped
