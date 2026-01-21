@@ -1,25 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import * as pdfjsLib from "pdfjs-dist/build/pdf";
-
-// Worker (kopiowany do /public przez postinstall)
-pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 function normChar(ch) {
-  // MVP-normalizacja (spacje/dashy/cudzysłowy)
   const map = {
     "–": "-",
     "—": "-",
-    "-": "-",
     "“": '"',
     "”": '"',
     "„": '"',
     "’": "'",
     "‘": "'",
   };
-  const c = map[ch] || ch;
-  return c;
+  return map[ch] || ch;
 }
 
 function normalizeText(s) {
@@ -34,17 +27,16 @@ function normalizeText(s) {
 }
 
 /**
- * Buduje z listy spanTextów:
- * - normStr: znormalizowany string (z pojedynczymi spacjami)
- * - map: normIndex -> { spanIdx }
- * Mapujemy "który span odpowiada danej pozycji w normStr"
- * (MVP: highlightujemy całe spany, nie dokładny range znaków)
+ * Buduje:
+ * - normStr: znormalizowany string (lower, single spaces)
+ * - map: normIndex -> spanIdx
+ * MVP: highlightujemy całe spany, nie dokładny zakres znaków.
  */
 function buildNormalizedWithSpanMap(spanTexts) {
   let norm = "";
   const map = []; // norm char index -> spanIdx
-
   let prevWasSpace = true;
+
   for (let i = 0; i < spanTexts.length; i++) {
     const raw = spanTexts[i] || "";
     for (let j = 0; j < raw.length; j++) {
@@ -72,7 +64,6 @@ function buildNormalizedWithSpanMap(spanTexts) {
   }
 
   norm = norm.trimEnd();
-  // map może być o 1 dłuższa przez trimEnd; upraszczamy:
   while (map.length > norm.length) map.pop();
 
   return { normStr: norm, map };
@@ -101,7 +92,29 @@ export default function Home() {
   const canvasRef = useRef(null);
   const textLayerRef = useRef(null);
 
-  const pk = useMemo(() => (meta?.pk || "Id"), [meta]);
+  // pdf.js ładowany dynamicznie (żeby next build nie wywalał SSR)
+  const pdfjsRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (typeof window === "undefined") return;
+      const mod = await import("pdfjs-dist/build/pdf");
+      if (cancelled) return;
+
+      mod.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+      pdfjsRef.current = mod;
+    })().catch((e) => {
+      console.error("Failed to load pdfjs", e);
+      setPdfMessage("Nie udało się załadować pdf.js (sprawdź logi przeglądarki).");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const pk = useMemo(() => meta?.pk || "Id", [meta]);
 
   async function loadMeta() {
     const r = await fetch(`${API}/meta`);
@@ -145,11 +158,17 @@ export default function Home() {
       alert("Nie udało się zmienić statusu");
       return;
     }
-    // odśwież listę + szczegóły lokalnie
     await loadList();
     if (selected && selected[pk] === id) {
       setSelected({ ...selected, Status: status });
     }
+  }
+
+  function pickField(row, candidates) {
+    for (const k of candidates) {
+      if (row && row[k] !== undefined && row[k] !== null && row[k] !== "") return row[k];
+    }
+    return null;
   }
 
   async function onSelect(row) {
@@ -157,12 +176,19 @@ export default function Home() {
     setPdfMessage("");
     setHighlightSpanIndexes([]);
     setPageNumber(1);
+    setPdfDoc(null);
 
-    const pdfUrl = row?.pdfWebUrl || row?.pdf_web_url || row?.pdf_web_url || row?.pdfUrl;
-    const quote = row?.sourceQuote || row?.source_quote || row?.SOURCEQUOTE || row?.SourceQuote;
+    const pdfjsLib = pdfjsRef.current;
+    if (!pdfjsLib) {
+      setPdfMessage("PDF.js jeszcze się ładuje — spróbuj ponownie za sekundę.");
+      return;
+    }
+
+    const pdfUrl = pickField(row, ["pdfWebUrl", "pdf_web_url", "pdfUrl", "PDF_URL", "pdf_web_url"]);
+    const quote = pickField(row, ["sourceQuote", "source_quote", "SourceQuote", "SOURCEQUOTE"]);
 
     if (!pdfUrl) {
-      setPdfMessage("Brak URL do PDF w rekordzie.");
+      setPdfMessage("Brak URL do PDF w rekordzie (sprawdź PDF_URL_COLUMN).");
       return;
     }
 
@@ -178,7 +204,6 @@ export default function Home() {
         return;
       }
 
-      // skanowanie stron (wariant A)
       const maxPages = Math.min(doc.numPages, meta?.pdf_max_pages_scan || 50);
       const target = normalizeText(quote);
 
@@ -186,12 +211,12 @@ export default function Home() {
       for (let p = 1; p <= maxPages; p++) {
         const page = await doc.getPage(p);
         const textContent = await page.getTextContent();
-        const spans = textContent.items.map((it) => (it.str || ""));
-        const { normStr, map } = buildNormalizedWithSpanMap(spans);
+        const spans = textContent.items.map((it) => it.str || "");
 
+        const { normStr, map } = buildNormalizedWithSpanMap(spans);
         const idx = normStr.indexOf(target);
+
         if (idx >= 0) {
-          // Map norm range -> spans
           const start = idx;
           const end = idx + target.length - 1;
           const spanSet = new Set();
@@ -220,6 +245,10 @@ export default function Home() {
 
   async function renderPage() {
     if (!pdfDoc) return;
+
+    const pdfjsLib = pdfjsRef.current;
+    if (!pdfjsLib) return;
+
     const canvas = canvasRef.current;
     const textLayerDiv = textLayerRef.current;
     if (!canvas || !textLayerDiv) return;
@@ -227,12 +256,10 @@ export default function Home() {
     const page = await pdfDoc.getPage(pageNumber);
     const viewport = page.getViewport({ scale: 1.35 });
 
-    // Canvas
     const ctx = canvas.getContext("2d");
     canvas.width = viewport.width;
     canvas.height = viewport.height;
 
-    // Czyść warstwę tekstu
     textLayerDiv.innerHTML = "";
     textLayerDiv.style.position = "absolute";
     textLayerDiv.style.left = "0";
@@ -242,29 +269,24 @@ export default function Home() {
 
     await page.render({ canvasContext: ctx, viewport }).promise;
 
-    // Text layer
     const textContent = await page.getTextContent();
-    // Minimalny renderer text layer (bez pdfjs viewer):
-    // Każdy item jako span; pozycjonowanie wg transform.
+
     textContent.items.forEach((item, idx) => {
       const span = document.createElement("span");
       span.textContent = item.str || "";
       span.style.position = "absolute";
       span.style.whiteSpace = "pre";
 
-      // transform: [a, b, c, d, e, f]
       const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
       const x = tx[4];
       const y = tx[5];
       const fontHeight = Math.hypot(tx[2], tx[3]);
 
       span.style.left = `${x}px`;
-      // pdf coordinate origin differs; viewport already handles, so y - fontHeight is acceptable for MVP
       span.style.top = `${y - fontHeight}px`;
       span.style.fontSize = `${fontHeight}px`;
       span.style.transformOrigin = "0 0";
 
-      // highlight whole span if it's in matched set
       if (highlightSpanIndexes.includes(idx)) {
         span.style.background = "yellow";
       }
@@ -287,7 +309,13 @@ export default function Home() {
         <h2 style={{ marginTop: 0 }}>Orders MVP</h2>
 
         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-          <select value={statusFilter} onChange={(e) => { setPage(1); setStatusFilter(e.target.value); }}>
+          <select
+            value={statusFilter}
+            onChange={(e) => {
+              setPage(1);
+              setStatusFilter(e.target.value);
+            }}
+          >
             <option value="">status: (all)</option>
             <option value="new">new</option>
             <option value="confirmed">confirmed</option>
@@ -297,9 +325,13 @@ export default function Home() {
           <input
             placeholder="Klient contains..."
             value={klientFilter}
-            onChange={(e) => { setPage(1); setKlientFilter(e.target.value); }}
+            onChange={(e) => {
+              setPage(1);
+              setKlientFilter(e.target.value);
+            }}
             style={{ flex: 1 }}
           />
+
           <button onClick={() => loadList()} disabled={loadingList}>
             {loadingList ? "Ładowanie..." : "Odśwież"}
           </button>
@@ -308,8 +340,12 @@ export default function Home() {
         <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
           Razem: {total} | Strona: {page}
           <span style={{ marginLeft: 10 }}>
-            <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>◀</button>
-            <button onClick={() => setPage((p) => p + 1)} style={{ marginLeft: 6 }}>▶</button>
+            <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
+              ◀
+            </button>
+            <button onClick={() => setPage((p) => p + 1)} style={{ marginLeft: 6 }}>
+              ▶
+            </button>
           </span>
         </div>
 
@@ -328,6 +364,7 @@ export default function Home() {
               const status = row.Status ?? row.status ?? "";
               const klient = row.Klient ?? row.klient ?? "";
               const quote = row.sourceQuote ?? "";
+
               const isSel = selectedId === id;
 
               return (
@@ -340,9 +377,7 @@ export default function Home() {
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{status}</td>
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{klient}</td>
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6, maxWidth: 220 }}>
-                    <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {quote}
-                    </div>
+                    <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{quote}</div>
                   </td>
                 </tr>
               );
@@ -359,16 +394,15 @@ export default function Home() {
 
         {selected && (
           <>
-            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center" }}>
               <b>ID:</b> {selectedId}
               <button onClick={() => updateStatus(selectedId, "new")}>new</button>
               <button onClick={() => updateStatus(selectedId, "confirmed")}>confirmed</button>
               <button onClick={() => updateStatus(selectedId, "rejected")}>rejected</button>
+              {loadingPdf && <span style={{ marginLeft: 8, fontSize: 12 }}>Ładowanie PDF...</span>}
             </div>
 
-            <div style={{ fontSize: 12, color: "#444", marginBottom: 10 }}>
-              {loadingPdf ? "Ładowanie PDF..." : pdfMessage}
-            </div>
+            <div style={{ fontSize: 12, color: "#444", marginBottom: 10 }}>{pdfMessage}</div>
 
             <details style={{ marginBottom: 10 }}>
               <summary>JSON rekordu</summary>
@@ -379,7 +413,10 @@ export default function Home() {
 
             <div style={{ marginBottom: 8, display: "flex", gap: 8, alignItems: "center" }}>
               <button onClick={() => setPageNumber((p) => Math.max(1, p - 1))}>Poprzednia strona</button>
-              <button onClick={() => setPageNumber((p) => p + 1)} disabled={!pdfDoc || pageNumber >= (pdfDoc?.numPages || 1)}>
+              <button
+                onClick={() => setPageNumber((p) => p + 1)}
+                disabled={!pdfDoc || pageNumber >= (pdfDoc?.numPages || 1)}
+              >
                 Następna strona
               </button>
               <div style={{ fontSize: 12, color: "#666" }}>
