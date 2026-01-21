@@ -6,26 +6,32 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
     environment:
+      # ---- MSSQL ----
       MSSQL_SERVER: "metrix-sql"
       MSSQL_PORT: "1433"
       MSSQL_DB: "CDNXL_METRIXM"
       MSSQL_USER: "amada"
-      MSSQL_PASSWORD: "<TU_WPISZ_HASLO_SQL>"
+      MSSQL_PASSWORD: "${MSSQL_PASSWORD}"
       MSSQL_TABLE: "dbo.krakowiakZamowienian8n"
-      MSSQL_PK: "Rid"   # np. Id
+      MSSQL_PK: "Id"   # np. "Id"
 
+      # ---- Kolumny biznesowe (domyślne) ----
       SOURCEQUOTE_COLUMN: "sourceQuote"
-      PDF_URL_COLUMN: "pdf_web_url"
+      PDF_URL_COLUMN: "pdfWebUrl"
       STATUS_COLUMN: "Status"
-      CLIENT_COLUMN: ""                # zostaw puste na start
+      CLIENT_COLUMN: "Klient"          # jeśli nie masz takiej kolumny, później zmienimy albo wyłączymy filtr
 
-      PDF_MAX_BYTES: "52428800"
-      PDF_PROXY_TIMEOUT_SECONDS: "30"
+      # ---- API ----
+      # Dla prostoty w MVP pozwalamy na CORS z dowolnego hosta
+      CORS_ALLOW_ORIGINS: "*"
 
-      ALLOWED_ORIGINS: "*"
-    ports:
-      - "8000:8000"
+      # Limit skanowania stron pod highlight (wariant A)
+      PDF_MAX_PAGES_SCAN: "50"
+
+    # Jeśli MSSQL jest poza dockerem, depends_on nie ma znaczenia — zostawiamy bez.
     restart: unless-stopped
 
   web:
@@ -33,13 +39,13 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
-    environment:
-      NEXT_PUBLIC_API_URL: "http://<IP_WINDOWS_SERVER>:8000"
-      NEXT_PUBLIC_PAGE_SIZE: "50"
-      NEXT_PUBLIC_PDF_MAX_SCAN_PAGES: "50"
     ports:
       - "3000:3000"
+    environment:
+      # MUSI być adres dostępny z Twojej przeglądarki, a nie nazwa kontenera.
+      NEXT_PUBLIC_API_URL: "http://metrix-sql:8000"
     depends_on:
       - api
     restart: unless-stopped
+
 
