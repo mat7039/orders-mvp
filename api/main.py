@@ -6,7 +6,7 @@ import pyodbc
 import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 
 
 def env(name: str, default: Optional[str] = None) -> str:
@@ -16,6 +16,9 @@ def env(name: str, default: Optional[str] = None) -> str:
     return v
 
 
+# ----------------------------
+# ENV / CONFIG
+# ----------------------------
 MSSQL_SERVER = env("MSSQL_SERVER")
 MSSQL_PORT = env("MSSQL_PORT", "1433")
 MSSQL_DB = env("MSSQL_DB")
@@ -30,7 +33,7 @@ STATUS_COLUMN = env("STATUS_COLUMN", "Status")
 CLIENT_COLUMN = env("CLIENT_COLUMN", "Klient")
 
 CORS_ALLOW_ORIGINS = env("CORS_ALLOW_ORIGINS", "*")
-PDF_MAX_PAGES_SCAN = int(env("PDF_MAX_PAGES_SCAN", "50"))  # used by UI; API returns it in /meta
+PDF_MAX_PAGES_SCAN = int(env("PDF_MAX_PAGES_SCAN", "50"))  # UI may read it from /meta
 
 
 def build_conn_str() -> str:
@@ -64,7 +67,7 @@ def parse_schema_table(fully_qualified: str) -> Tuple[str, str]:
 
 
 def safe_ident(name: str) -> str:
-    # allow [Id] etc; but we validate raw names and quote with brackets.
+    # Allow only simple identifiers and quote with brackets.
     if not IDENT_RE.match(name):
         raise HTTPException(status_code=400, detail=f"Invalid identifier: {name}")
     return f"[{name}]"
@@ -98,6 +101,20 @@ def row_to_dict(cursor, row) -> Dict[str, Any]:
     return {columns[i]: row[i] for i in range(len(columns))}
 
 
+def validate_config_columns(existing_cols: List[str]) -> Dict[str, bool]:
+    s = set(existing_cols)
+    return {
+        "has_pk": MSSQL_PK in s,
+        "has_sourceQuote": SOURCEQUOTE_COLUMN in s,
+        "has_pdfUrl": PDF_URL_COLUMN in s,
+        "has_status": STATUS_COLUMN in s,
+        "has_client": CLIENT_COLUMN in s,
+    }
+
+
+# ----------------------------
+# APP
+# ----------------------------
 app = FastAPI(title="Orders MVP API")
 
 origins = [o.strip() for o in CORS_ALLOW_ORIGINS.split(",")] if CORS_ALLOW_ORIGINS != "*" else ["*"]
@@ -110,6 +127,9 @@ app.add_middleware(
 )
 
 
+# ----------------------------
+# BASIC
+# ----------------------------
 @app.get("/health")
 def health():
     return {"ok": True}
@@ -133,17 +153,77 @@ def meta():
     }
 
 
-def validate_config_columns(existing_cols: List[str]) -> Dict[str, bool]:
-    s = set(existing_cols)
+# ----------------------------
+# DIAGNOSTICS (VERY USEFUL WHEN LIST IS EMPTY)
+# ----------------------------
+@app.get("/diag")
+def diag():
+    """
+    Diagnostyka bez ujawniania hasła:
+    - gdzie API jest podłączone (server/db/user/table)
+    - ile rekordów widzi w tabeli
+    - jaki jest TOP(1) PK (żeby potwierdzić, że faktycznie są dane)
+    """
+    cols = fetch_table_columns()
+    flags = validate_config_columns(cols)
+
+    table_sql = safe_table(MSSQL_TABLE)
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+
+        # count
+        cur.execute(f"SELECT COUNT(1) AS cnt FROM {table_sql};")
+        cnt = int(cur.fetchone()[0])
+
+        # top1 pk (jeśli pk istnieje)
+        top_pk = None
+        if flags["has_pk"] and cnt > 0:
+            pk_sql = safe_ident(MSSQL_PK)
+            cur.execute(f"SELECT TOP 1 {pk_sql} AS pk FROM {table_sql} ORDER BY {pk_sql} DESC;")
+            r = cur.fetchone()
+            top_pk = r[0] if r else None
+
     return {
-        "has_pk": MSSQL_PK in s,
-        "has_sourceQuote": SOURCEQUOTE_COLUMN in s,
-        "has_pdfUrl": PDF_URL_COLUMN in s,
-        "has_status": STATUS_COLUMN in s,
-        "has_client": CLIENT_COLUMN in s,
+        "server": MSSQL_SERVER,
+        "port": MSSQL_PORT,
+        "db": MSSQL_DB,
+        "user": MSSQL_USER,
+        "table": MSSQL_TABLE,
+        "pk": MSSQL_PK,
+        "count": cnt,
+        "top_pk": top_pk,
+        "columns_count": len(cols),
+        "config_flags": flags,
     }
 
 
+@app.get("/top1")
+def top1():
+    """
+    Zwraca TOP 1 rekord z tabeli (pomaga zweryfikować, czy cokolwiek jest w tabeli).
+    """
+    cols = fetch_table_columns()
+    flags = validate_config_columns(cols)
+
+    if not flags["has_pk"]:
+        raise HTTPException(status_code=500, detail=f"PK column '{MSSQL_PK}' not found in table")
+
+    table_sql = safe_table(MSSQL_TABLE)
+    pk_sql = safe_ident(MSSQL_PK)
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT TOP 1 * FROM {table_sql} ORDER BY {pk_sql} DESC;")
+        row = cur.fetchone()
+        if not row:
+            return {"ok": True, "row": None}
+        return {"ok": True, "row": row_to_dict(cur, row)}
+
+
+# ----------------------------
+# ORDERS
+# ----------------------------
 @app.get("/orders")
 def list_orders(
     page: int = Query(1, ge=1),
@@ -176,10 +256,8 @@ def list_orders(
 
     offset = (page - 1) * page_size
 
-    # total count
     count_sql = f"SELECT COUNT(1) AS cnt FROM {table_sql}{where_sql};"
 
-    # paged query
     items_sql = (
         f"SELECT * FROM {table_sql}{where_sql} "
         f"ORDER BY {pk_sql} DESC "
@@ -258,22 +336,20 @@ def set_status(id: int, status: str = Query(..., pattern="^(new|confirmed|reject
     return {"ok": True, "id": id, "status": status}
 
 
+# ----------------------------
+# PDF PROXY
+# ----------------------------
 def candidate_download_urls(url: str) -> List[str]:
     # Try original + common "force download" variants.
     cands = [url]
 
-    if "download=1" not in url:
-        if "?" in url:
-            cands.append(url + "&download=1")
-        else:
-            cands.append(url + "?download=1")
+    def add_q(u: str, q: str) -> None:
+        if q in u:
+            return
+        cands.append(u + ("&" if "?" in u else "?") + q)
 
-    # Some share links work better with direct download query:
-    if "onedrive.live.com" in url and "download=1" not in url:
-        if "?" in url:
-            cands.append(url + "&download=1")
-        else:
-            cands.append(url + "?download=1")
+    add_q(url, "download=1")
+    add_q(url, "raw=1")
 
     # dedupe preserving order
     out = []
@@ -285,50 +361,56 @@ def candidate_download_urls(url: str) -> List[str]:
     return out
 
 
-async def fetch_pdf_stream(url: str):
+@app.get("/pdf")
+async def pdf_proxy(url: str = Query(..., min_length=8)):
+    # Minimal validate: http/https
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        raise HTTPException(status_code=400, detail="url must start with http:// or https://")
+
     timeout = httpx.Timeout(60.0, connect=20.0)
-    headers = {"User-Agent": "orders-mvp/1.0"}
+    headers = {"User-Agent": "orders-mvp/1.0", "Accept": "application/pdf,*/*"}
+
+    last_error = None
 
     async with httpx.AsyncClient(follow_redirects=True, timeout=timeout, headers=headers) as client:
-        last_error = None
         for u in candidate_download_urls(url):
             try:
-                r = await client.get(u)
-                # If it returns HTML, it’s probably a landing page / auth gate.
-                ctype = (r.headers.get("content-type") or "").lower()
-
-                # Quick signature check (PDF starts with %PDF)
-                first = r.content[:4] if r.content else b""
-                is_pdf = ("application/pdf" in ctype) or (first == b"%PDF")
-
-                if r.status_code >= 400:
-                    last_error = f"HTTP {r.status_code}"
+                # stream response
+                resp = await client.stream("GET", u)
+                if resp.status_code >= 400:
+                    last_error = f"HTTP {resp.status_code}"
+                    await resp.aclose()
                     continue
 
+                # peek first bytes to detect PDF (some links return HTML)
+                first = b""
+                async for chunk in resp.aiter_bytes():
+                    first = chunk
+                    break
+
+                ctype = (resp.headers.get("content-type") or "").lower()
+                is_pdf = ("application/pdf" in ctype) or (first.startswith(b"%PDF"))
                 if not is_pdf:
                     last_error = f"Not a PDF (content-type={ctype or 'unknown'})"
+                    await resp.aclose()
                     continue
 
-                # stream bytes
                 async def gen():
-                    yield r.content  # content is already buffered by httpx here
-                return gen, r.headers
+                    # yield already peeked bytes then stream the rest
+                    if first:
+                        yield first
+                    async for chunk2 in resp.aiter_bytes():
+                        yield chunk2
+                    await resp.aclose()
+
+                resp_headers = {"Cache-Control": "no-store"}
+                if "content-disposition" in resp.headers:
+                    resp_headers["Content-Disposition"] = resp.headers["content-disposition"]
+
+                return StreamingResponse(gen(), media_type="application/pdf", headers=resp_headers)
 
             except Exception as e:
                 last_error = str(e)
-                continue
 
-        raise HTTPException(status_code=502, detail=f"Could not fetch PDF from url. Last error: {last_error}")
+    raise HTTPException(status_code=502, detail=f"Could not fetch PDF from url. Last error: {last_error}")
 
-
-@app.get("/pdf")
-async def pdf_proxy(url: str = Query(..., min_length=8)):
-    gen, headers = await fetch_pdf_stream(url)
-
-    resp_headers = {}
-    # keep filename if present
-    if "content-disposition" in headers:
-        resp_headers["Content-Disposition"] = headers["content-disposition"]
-    resp_headers["Cache-Control"] = "no-store"
-
-    return StreamingResponse(gen(), media_type="application/pdf", headers=resp_headers)
