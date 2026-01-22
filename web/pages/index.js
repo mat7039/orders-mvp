@@ -1,6 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+function getApiBase() {
+  // 1) jeśli jednak masz NEXT_PUBLIC_API_URL i działa – użyj
+  const envApi = process.env.NEXT_PUBLIC_API_URL;
+  if (envApi && envApi.startsWith("http")) return envApi;
+
+  // 2) runtime fallback: ten sam host co UI, ale port API
+  if (typeof window !== "undefined") {
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:40098`;
+  }
+
+  // SSR fallback (nie powinno być użyte)
+  return "http://localhost:8000";
+}
+
+const API = getApiBase();
+
 
 function normChar(ch) {
   const map = {
@@ -307,7 +323,9 @@ export default function Home() {
       {/* LEFT: list */}
       <div style={{ width: "45%", borderRight: "1px solid #ddd", padding: 12, overflow: "auto" }}>
         <h2 style={{ marginTop: 0 }}>Orders MVP</h2>
-
+        <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
+  API: <b>{API}</b>
+</div>
         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
           <select
             value={statusFilter}
