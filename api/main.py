@@ -1,7 +1,8 @@
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
-
+import time
+from urllib.parse import quote
 import pyodbc
 import httpx
 from fastapi import FastAPI, HTTPException, Query
@@ -23,6 +24,10 @@ MSSQL_USER = env("MSSQL_USER")
 MSSQL_PASSWORD = env("MSSQL_PASSWORD")
 MSSQL_TABLE = env("MSSQL_TABLE", "dbo.krakowiakZamowienian8n")
 MSSQL_PK = env("MSSQL_PK", "Id")
+MS_TENANT_ID = os.getenv("MS_TENANT_ID")
+MS_CLIENT_ID = os.getenv("MS_CLIENT_ID")
+MS_CLIENT_SECRET = os.getenv("MS_CLIENT_SECRET")
+MS_DRIVE_ID = os.getenv("MS_DRIVE_ID")
 
 SOURCEQUOTE_COLUMN = env("SOURCEQUOTE_COLUMN", "sourceQuote")
 
@@ -286,6 +291,70 @@ def set_status(id: int, status: str = Query(..., pattern="^(new|confirmed|reject
 
     return {"ok": True, "id": id, "status": status}
 
+_graph_token = {"value": None, "exp": 0}
+
+async def graph_token() -> str:
+    if not (MS_TENANT_ID and MS_CLIENT_ID and MS_CLIENT_SECRET):
+        raise HTTPException(
+            status_code=500,
+            detail="Missing Graph env: MS_TENANT_ID/MS_CLIENT_ID/MS_CLIENT_SECRET",
+        )
+
+    now = int(time.time())
+    if _graph_token["value"] and now < _graph_token["exp"] - 60:
+        return _graph_token["value"]
+
+    token_url = f"https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token"
+    data = {
+        "client_id": MS_CLIENT_ID,
+        "client_secret": MS_CLIENT_SECRET,
+        "grant_type": "client_credentials",
+        "scope": "https://graph.microsoft.com/.default",
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(token_url, data=data)
+
+    if r.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Graph token failed: HTTP {r.status_code} {r.text[:200]}")
+
+    j = r.json()
+    _graph_token["value"] = j["access_token"]
+    _graph_token["exp"] = now + int(j.get("expires_in", 3600))
+    return _graph_token["value"]
+
+
+async def fetch_pdf_stream_graph(item_id: str):
+    if not MS_DRIVE_ID:
+        raise HTTPException(status_code=500, detail="Missing Graph env: MS_DRIVE_ID")
+
+    token = await graph_token()
+
+    # /content does redirect to a pre-authenticated download URL; follow_redirects=True handles it
+    url = f"https://graph.microsoft.com/v1.0/drives/{MS_DRIVE_ID}/items/{quote(item_id)}/content"
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=httpx.Timeout(120.0, connect=20.0),
+        headers={"User-Agent": "orders-mvp/1.0"},
+    ) as client:
+        r = await client.get(url, headers=headers)
+
+    if r.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Graph download failed: HTTP {r.status_code}")
+
+    ctype = (r.headers.get("content-type") or "").lower()
+    first = r.content[:4] if r.content else b""
+    is_pdf = ("application/pdf" in ctype) or (first == b"%PDF")
+    if not is_pdf:
+        raise HTTPException(status_code=502, detail=f"Graph returned non-PDF (content-type={ctype or 'unknown'})")
+
+    async def gen():
+        yield r.content
+
+    return gen, r.headers
+
 
 def candidate_download_urls(url: str) -> List[str]:
     cands = [url]
@@ -339,14 +408,27 @@ async def fetch_pdf_stream(url: str):
 
 
 @app.get("/pdf")
-async def pdf_proxy(url: str = Query(..., min_length=8)):
-    gen, headers = await fetch_pdf_stream(url)
+async def pdf_proxy(
+    url: Optional[str] = Query(None),
+    id: Optional[str] = Query(None),
+):
+    # Prefer Graph by driveItem id (secure, no public links)
+    if id:
+        gen, headers = await fetch_pdf_stream_graph(id)
+        resp_headers = {"Cache-Control": "no-store"}
+        if "content-disposition" in headers:
+            resp_headers["Content-Disposition"] = headers["content-disposition"]
+        return StreamingResponse(gen(), media_type="application/pdf", headers=resp_headers)
 
-    resp_headers = {}
+    # Fallback: legacy URL mode (may 403 on SharePoint)
+    if not url:
+        raise HTTPException(status_code=400, detail="Provide either ?id=... or ?url=...")
+
+    gen, headers = await fetch_pdf_stream(url)
+    resp_headers = {"Cache-Control": "no-store"}
     if "content-disposition" in headers:
         resp_headers["Content-Disposition"] = headers["content-disposition"]
-    resp_headers["Cache-Control"] = "no-store"
-
     return StreamingResponse(gen(), media_type="application/pdf", headers=resp_headers)
+
 
 
