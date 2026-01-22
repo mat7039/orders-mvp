@@ -386,7 +386,7 @@ setPdfDoc(doc);
               const id = row[pk];
               const status = row.Status ?? row.status ?? "";
               const klient = row.Klient ?? row.klient ?? "";
-              const quote = row.sourceQuote ?? "";
+              const quoteText = row.sourceQuote ?? "";
 
               const isSel = selectedId === id;
 
@@ -400,7 +400,10 @@ setPdfDoc(doc);
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{status}</td>
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{klient}</td>
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6, maxWidth: 220 }}>
-                    <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{quote}</div>
+                    <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+  {quoteText}
+</div>
+
                   </td>
                 </tr>
               );
