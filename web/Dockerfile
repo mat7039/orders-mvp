@@ -16,7 +16,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # (opcjonalnie) jeśli Next build wywala przez eslint, dodaj next.config.js (patrz niżej)
-RUN npm run build
+RUN npm run build || (echo "---- npm logs ----" && ls -la /root/.npm/_logs || true && cat /root/.npm/_logs/*.log || true && echo "---- end npm logs ----" && exit 1)
+
 
 # ---- runner ----
 FROM node:20-alpine AS runner
