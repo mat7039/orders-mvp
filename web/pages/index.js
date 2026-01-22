@@ -200,18 +200,23 @@ export default function Home() {
       return;
     }
 
-    const pdfUrl = pickField(row, ["pdfWebUrl", "pdf_web_url", "pdfUrl", "PDF_URL", "pdf_web_url"]);
-    const quote = pickField(row, ["sourceQuote", "source_quote", "SourceQuote", "SOURCEQUOTE"]);
+const oneDriveId = pickField(row, ["onedriveId", "onedrive_id", "OneDriveId"]);
+const pdfUrl = pickField(row, ["pdfWebUrl", "pdf_web_url", "pdfUrl", "PDF_URL", "pdf_web_url"]);
+const quote = pickField(row, ["sourceQuote", "source_quote", "SourceQuote", "SOURCEQUOTE"]);
 
-    if (!pdfUrl) {
-      setPdfMessage("Brak URL do PDF w rekordzie (sprawdź PDF_URL_COLUMN).");
-      return;
-    }
+let proxied = null;
+if (oneDriveId) {
+  proxied = `${API}/pdf?id=${encodeURIComponent(oneDriveId)}`;
+} else if (pdfUrl) {
+  proxied = `${API}/pdf?url=${encodeURIComponent(pdfUrl)}`; // fallback
+} else {
+  setPdfMessage("Brak onedriveId i brak URL do PDF w rekordzie.");
+  return;
+}
 
-    setLoadingPdf(true);
-    try {
-      const proxied = `${API}/pdf?url=${encodeURIComponent(pdfUrl)}`;
-      const doc = await pdfjsLib.getDocument({ url: proxied }).promise;
+const doc = await pdfjsLib.getDocument({ url: proxied }).promise;
+setPdfDoc(doc);
+
       setPdfDoc(doc);
 
       if (!quote) {
