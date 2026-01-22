@@ -16,9 +16,6 @@ def env(name: str, default: Optional[str] = None) -> str:
     return v
 
 
-# ----------------------------
-# ENV / CONFIG
-# ----------------------------
 MSSQL_SERVER = env("MSSQL_SERVER")
 MSSQL_PORT = env("MSSQL_PORT", "1433")
 MSSQL_DB = env("MSSQL_DB")
@@ -28,16 +25,20 @@ MSSQL_TABLE = env("MSSQL_TABLE", "dbo.krakowiakZamowienian8n")
 MSSQL_PK = env("MSSQL_PK", "Id")
 
 SOURCEQUOTE_COLUMN = env("SOURCEQUOTE_COLUMN", "sourceQuote")
-PDF_URL_COLUMN = env("PDF_URL_COLUMN", "pdf_web_url")
+
+# ✅ U Ciebie jest pdfWebUrl (camelCase)
+PDF_URL_COLUMN = env("PDF_URL_COLUMN", "pdfWebUrl")
+
 STATUS_COLUMN = env("STATUS_COLUMN", "Status")
+
+# ✅ U Ciebie jest Klient (duże K)
 CLIENT_COLUMN = env("CLIENT_COLUMN", "Klient")
 
 CORS_ALLOW_ORIGINS = env("CORS_ALLOW_ORIGINS", "*")
-PDF_MAX_PAGES_SCAN = int(env("PDF_MAX_PAGES_SCAN", "50"))  # UI may read it from /meta
+PDF_MAX_PAGES_SCAN = int(env("PDF_MAX_PAGES_SCAN", "50"))  # used by UI; API returns it in /meta
 
 
 def build_conn_str() -> str:
-    # Encrypt/TrustServerCertificate are pragmatic defaults for on-prem MVP.
     return (
         "DRIVER={ODBC Driver 18 for SQL Server};"
         f"SERVER={MSSQL_SERVER},{MSSQL_PORT};"
@@ -51,14 +52,16 @@ def build_conn_str() -> str:
 
 
 def get_conn():
-    return pyodbc.connect(build_conn_str())
+    try:
+        return pyodbc.connect(build_conn_str())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB connect failed: {e}")
 
 
 IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def parse_schema_table(fully_qualified: str) -> Tuple[str, str]:
-    # supports "dbo.Table" or "Table"
     if "." in fully_qualified:
         schema, table = fully_qualified.split(".", 1)
     else:
@@ -67,7 +70,6 @@ def parse_schema_table(fully_qualified: str) -> Tuple[str, str]:
 
 
 def safe_ident(name: str) -> str:
-    # Allow only simple identifiers and quote with brackets.
     if not IDENT_RE.match(name):
         raise HTTPException(status_code=400, detail=f"Invalid identifier: {name}")
     return f"[{name}]"
@@ -112,9 +114,6 @@ def validate_config_columns(existing_cols: List[str]) -> Dict[str, bool]:
     }
 
 
-# ----------------------------
-# APP
-# ----------------------------
 app = FastAPI(title="Orders MVP API")
 
 origins = [o.strip() for o in CORS_ALLOW_ORIGINS.split(",")] if CORS_ALLOW_ORIGINS != "*" else ["*"]
@@ -127,9 +126,6 @@ app.add_middleware(
 )
 
 
-# ----------------------------
-# BASIC
-# ----------------------------
 @app.get("/health")
 def health():
     return {"ok": True}
@@ -138,7 +134,6 @@ def health():
 @app.get("/meta")
 def meta():
     cols = fetch_table_columns()
-
     return {
         "table": MSSQL_TABLE,
         "pk": MSSQL_PK,
@@ -153,17 +148,9 @@ def meta():
     }
 
 
-# ----------------------------
-# DIAGNOSTICS (VERY USEFUL WHEN LIST IS EMPTY)
-# ----------------------------
+# ✅ NOWE: diagnostyka (bez hasła)
 @app.get("/diag")
 def diag():
-    """
-    Diagnostyka bez ujawniania hasła:
-    - gdzie API jest podłączone (server/db/user/table)
-    - ile rekordów widzi w tabeli
-    - jaki jest TOP(1) PK (żeby potwierdzić, że faktycznie są dane)
-    """
     cols = fetch_table_columns()
     flags = validate_config_columns(cols)
 
@@ -171,59 +158,25 @@ def diag():
 
     with get_conn() as conn:
         cur = conn.cursor()
+        cur.execute("SELECT DB_NAME()")
+        current_db = cur.fetchone()[0]
 
-        # count
-        cur.execute(f"SELECT COUNT(1) AS cnt FROM {table_sql};")
+        cur.execute(f"SELECT COUNT(1) FROM {table_sql};")
         cnt = int(cur.fetchone()[0])
 
-        # top1 pk (jeśli pk istnieje)
-        top_pk = None
-        if flags["has_pk"] and cnt > 0:
-            pk_sql = safe_ident(MSSQL_PK)
-            cur.execute(f"SELECT TOP 1 {pk_sql} AS pk FROM {table_sql} ORDER BY {pk_sql} DESC;")
-            r = cur.fetchone()
-            top_pk = r[0] if r else None
-
     return {
-        "server": MSSQL_SERVER,
-        "port": MSSQL_PORT,
-        "db": MSSQL_DB,
-        "user": MSSQL_USER,
+        "mssql_server": MSSQL_SERVER,
+        "mssql_port": MSSQL_PORT,
+        "mssql_user": MSSQL_USER,
+        "configured_db": MSSQL_DB,
+        "current_db": current_db,
         "table": MSSQL_TABLE,
         "pk": MSSQL_PK,
         "count": cnt,
-        "top_pk": top_pk,
-        "columns_count": len(cols),
-        "config_flags": flags,
+        "column_flags": flags,
     }
 
 
-@app.get("/top1")
-def top1():
-    """
-    Zwraca TOP 1 rekord z tabeli (pomaga zweryfikować, czy cokolwiek jest w tabeli).
-    """
-    cols = fetch_table_columns()
-    flags = validate_config_columns(cols)
-
-    if not flags["has_pk"]:
-        raise HTTPException(status_code=500, detail=f"PK column '{MSSQL_PK}' not found in table")
-
-    table_sql = safe_table(MSSQL_TABLE)
-    pk_sql = safe_ident(MSSQL_PK)
-
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(f"SELECT TOP 1 * FROM {table_sql} ORDER BY {pk_sql} DESC;")
-        row = cur.fetchone()
-        if not row:
-            return {"ok": True, "row": None}
-        return {"ok": True, "row": row_to_dict(cur, row)}
-
-
-# ----------------------------
-# ORDERS
-# ----------------------------
 @app.get("/orders")
 def list_orders(
     page: int = Query(1, ge=1),
@@ -248,16 +201,13 @@ def list_orders(
         params.append(status)
 
     if klient and flags["has_client"]:
-        # contains search (case depends on collation)
         where.append(f"{safe_ident(CLIENT_COLUMN)} LIKE ?")
         params.append(f"%{klient}%")
 
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
-
     offset = (page - 1) * page_size
 
     count_sql = f"SELECT COUNT(1) AS cnt FROM {table_sql}{where_sql};"
-
     items_sql = (
         f"SELECT * FROM {table_sql}{where_sql} "
         f"ORDER BY {pk_sql} DESC "
@@ -291,6 +241,7 @@ def list_orders(
 def get_order(id: int):
     cols = fetch_table_columns()
     flags = validate_config_columns(cols)
+
     if not flags["has_pk"]:
         raise HTTPException(status_code=500, detail=f"PK column '{MSSQL_PK}' not found in table")
 
@@ -336,22 +287,15 @@ def set_status(id: int, status: str = Query(..., pattern="^(new|confirmed|reject
     return {"ok": True, "id": id, "status": status}
 
 
-# ----------------------------
-# PDF PROXY
-# ----------------------------
 def candidate_download_urls(url: str) -> List[str]:
-    # Try original + common "force download" variants.
     cands = [url]
 
-    def add_q(u: str, q: str) -> None:
-        if q in u:
-            return
-        cands.append(u + ("&" if "?" in u else "?") + q)
+    if "download=1" not in url:
+        if "?" in url:
+            cands.append(url + "&download=1")
+        else:
+            cands.append(url + "?download=1")
 
-    add_q(url, "download=1")
-    add_q(url, "raw=1")
-
-    # dedupe preserving order
     out = []
     seen = set()
     for u in cands:
@@ -361,56 +305,48 @@ def candidate_download_urls(url: str) -> List[str]:
     return out
 
 
-@app.get("/pdf")
-async def pdf_proxy(url: str = Query(..., min_length=8)):
-    # Minimal validate: http/https
-    if not re.match(r"^https?://", url, re.IGNORECASE):
-        raise HTTPException(status_code=400, detail="url must start with http:// or https://")
-
+async def fetch_pdf_stream(url: str):
     timeout = httpx.Timeout(60.0, connect=20.0)
-    headers = {"User-Agent": "orders-mvp/1.0", "Accept": "application/pdf,*/*"}
-
-    last_error = None
+    headers = {"User-Agent": "orders-mvp/1.0"}
 
     async with httpx.AsyncClient(follow_redirects=True, timeout=timeout, headers=headers) as client:
+        last_error = None
         for u in candidate_download_urls(url):
             try:
-                # stream response
-                resp = await client.stream("GET", u)
-                if resp.status_code >= 400:
-                    last_error = f"HTTP {resp.status_code}"
-                    await resp.aclose()
+                r = await client.get(u)
+                ctype = (r.headers.get("content-type") or "").lower()
+                first = r.content[:4] if r.content else b""
+                is_pdf = ("application/pdf" in ctype) or (first == b"%PDF")
+
+                if r.status_code >= 400:
+                    last_error = f"HTTP {r.status_code}"
                     continue
 
-                # peek first bytes to detect PDF (some links return HTML)
-                first = b""
-                async for chunk in resp.aiter_bytes():
-                    first = chunk
-                    break
-
-                ctype = (resp.headers.get("content-type") or "").lower()
-                is_pdf = ("application/pdf" in ctype) or (first.startswith(b"%PDF"))
                 if not is_pdf:
                     last_error = f"Not a PDF (content-type={ctype or 'unknown'})"
-                    await resp.aclose()
                     continue
 
                 async def gen():
-                    # yield already peeked bytes then stream the rest
-                    if first:
-                        yield first
-                    async for chunk2 in resp.aiter_bytes():
-                        yield chunk2
-                    await resp.aclose()
+                    yield r.content
 
-                resp_headers = {"Cache-Control": "no-store"}
-                if "content-disposition" in resp.headers:
-                    resp_headers["Content-Disposition"] = resp.headers["content-disposition"]
-
-                return StreamingResponse(gen(), media_type="application/pdf", headers=resp_headers)
+                return gen, r.headers
 
             except Exception as e:
                 last_error = str(e)
+                continue
 
-    raise HTTPException(status_code=502, detail=f"Could not fetch PDF from url. Last error: {last_error}")
+        raise HTTPException(status_code=502, detail=f"Could not fetch PDF from url. Last error: {last_error}")
+
+
+@app.get("/pdf")
+async def pdf_proxy(url: str = Query(..., min_length=8)):
+    gen, headers = await fetch_pdf_stream(url)
+
+    resp_headers = {}
+    if "content-disposition" in headers:
+        resp_headers["Content-Disposition"] = headers["content-disposition"]
+    resp_headers["Cache-Control"] = "no-store"
+
+    return StreamingResponse(gen(), media_type="application/pdf", headers=resp_headers)
+
 
