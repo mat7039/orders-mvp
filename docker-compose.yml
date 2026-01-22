@@ -7,7 +7,7 @@ services:
       context: ./api
       dockerfile: Dockerfile
     ports:
-      - "20120:8000"
+      - "40098:8000"
     environment:
       # ---- MSSQL ----
       MSSQL_SERVER: "metrix-sql"
@@ -40,10 +40,10 @@ services:
       context: ./web
       dockerfile: Dockerfile
     ports:
-      - "20121:3000"
+      - "40099:3000"
     environment:
       # MUSI być adres dostępny z Twojej przeglądarki, a nie nazwa kontenera.
-      NEXT_PUBLIC_API_URL: "http://srv39.mikr.us:20120"
+      NEXT_PUBLIC_API_URL: "http://srv39.mikr.us:40098"
     depends_on:
       - api
     restart: unless-stopped
