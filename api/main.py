@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 import pyodbc
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -347,29 +347,32 @@ async def graph_token() -> str:
     return _graph_token["value"]
 
 
-async def fetch_pdf_stream_graph(item_id: str):
-    # ✅ runtime env (nie przy starcie procesu)
+async def fetch_pdf_stream_graph(item_id: str, range_header: Optional[str] = None):
     drive_id = os.getenv("MS_DRIVE_ID")
     if not drive_id:
         raise HTTPException(status_code=500, detail="Missing Graph env: MS_DRIVE_ID")
 
     token = await graph_token()
 
-    # /content does redirect to a pre-authenticated download URL; follow_redirects=True handles it
     url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{quote(item_id)}/content"
-    headers = {"Authorization": f"Bearer {token}"}
+
+    req_headers = {
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "orders-mvp/1.0",
+    }
+    if range_header:
+        req_headers["Range"] = range_header
 
     async with httpx.AsyncClient(
         follow_redirects=True,
         timeout=httpx.Timeout(120.0, connect=20.0),
-        headers={"User-Agent": "orders-mvp/1.0"},
     ) as client:
-        r = await client.get(url, headers=headers)
+        r = await client.get(url, headers=req_headers)
 
     if r.status_code >= 400:
-        # warto dopiąć tekst odpowiedzi (ucięty), żeby szybciej diagnozować 401/403/404
         raise HTTPException(status_code=502, detail=f"Graph download failed: HTTP {r.status_code} {r.text[:200]}")
 
+    # Graph przy Range zwykle zwróci 206 i Content-Range
     ctype = (r.headers.get("content-type") or "").lower()
     first = r.content[:4] if r.content else b""
     is_pdf = ("application/pdf" in ctype) or (first == b"%PDF")
@@ -379,7 +382,8 @@ async def fetch_pdf_stream_graph(item_id: str):
     async def gen():
         yield r.content
 
-    return gen, r.headers
+    return gen, r.headers, r.status_code
+
 
 
 def candidate_download_urls(url: str) -> List[str]:
@@ -400,37 +404,29 @@ def candidate_download_urls(url: str) -> List[str]:
     return out
 
 
-async def fetch_pdf_stream(url: str):
+async def fetch_pdf_stream(url: str, range_header: Optional[str] = None):
     timeout = httpx.Timeout(60.0, connect=20.0)
-    headers = {"User-Agent": "orders-mvp/1.0"}
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout, headers=headers) as client:
+    async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
         last_error = None
         for u in candidate_download_urls(url):
             try:
-                r = await client.get(u)
-                ctype = (r.headers.get("content-type") or "").lower()
-                first = r.content[:4] if r.content else b""
-                is_pdf = ("application/pdf" in ctype) or (first == b"%PDF")
+                req_headers = {"User-Agent": "orders-mvp/1.0"}
+                if range_header:
+                    req_headers["Range"] = range_header
 
-                if r.status_code >= 400:
-                    last_error = f"HTTP {r.status_code}"
-                    continue
-
-                if not is_pdf:
-                    last_error = f"Not a PDF (content-type={ctype or 'unknown'})"
-                    continue
-
+                r = await client.get(u, headers=req_headers)
+                ...
                 async def gen():
                     yield r.content
 
-                return gen, r.headers
-
+                return gen, r.headers, r.status_code
             except Exception as e:
                 last_error = str(e)
                 continue
 
         raise HTTPException(status_code=502, detail=f"Could not fetch PDF from url. Last error: {last_error}")
+
 
 
 @app.get("/pdf")
