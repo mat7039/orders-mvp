@@ -16,27 +16,24 @@ services:
       MSSQL_USER: "amada"
       MSSQL_PASSWORD: "${MSSQL_PASSWORD}"
       MSSQL_TABLE: "dbo.krakowiakZamowienian8n"
-      MSSQL_PK: "Id"   # np. "Id"
-      # ---- Microsoft Graph ---- 
-      MS_TENANT_ID: "${MS_TENANT_ID}" 
-      MS_CLIENT_ID: "${MS_CLIENT_ID}" 
-      MS_CLIENT_SECRET: "${MS_CLIENT_SECRET}" 
-      MS_DRIVE_ID: "${MS_DRIVE_ID}
+      MSSQL_PK: "Id"
 
       # ---- Kolumny biznesowe (domyślne) ----
       SOURCEQUOTE_COLUMN: "sourceQuote"
       PDF_URL_COLUMN: "pdfWebUrl"
       STATUS_COLUMN: "Status"
-      CLIENT_COLUMN: "Klient"          # jeśli nie masz takiej kolumny, później zmienimy albo wyłączymy filtr
+      CLIENT_COLUMN: "Klient"
 
       # ---- API ----
-      # Dla prostoty w MVP pozwalamy na CORS z dowolnego hosta
       CORS_ALLOW_ORIGINS: "*"
-
-      # Limit skanowania stron pod highlight (wariant A)
       PDF_MAX_PAGES_SCAN: "50"
 
-    # Jeśli MSSQL jest poza dockerem, depends_on nie ma znaczenia — zostawiamy bez.
+      # ---- Microsoft Graph ----
+      MS_TENANT_ID: "${MS_TENANT_ID}"
+      MS_CLIENT_ID: "${MS_CLIENT_ID}"
+      MS_CLIENT_SECRET: "${MS_CLIENT_SECRET}"
+      MS_DRIVE_ID: "${MS_DRIVE_ID}"
+
     restart: unless-stopped
 
   web:
@@ -47,8 +44,8 @@ services:
     ports:
       - "40099:3000"
     environment:
-      # MUSI być adres dostępny z Twojej przeglądarki, a nie nazwa kontenera.
       NEXT_PUBLIC_API_URL: "http://srv39.mikr.us:40098"
     depends_on:
       - api
     restart: unless-stopped
+
