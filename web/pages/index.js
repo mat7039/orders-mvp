@@ -118,7 +118,7 @@ export default function Home() {
       const mod = await import("pdfjs-dist/legacy/build/pdf");
       if (cancelled) return;
 
-      mod.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${mod.version}/pdf.worker.min.js`;
+      mod.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${mod.version}/build/pdf.worker.min.js`;
       pdfjsRef.current = mod;
     })().catch((e) => {
       console.error("Failed to load pdfjs", e);
