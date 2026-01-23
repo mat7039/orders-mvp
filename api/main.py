@@ -431,26 +431,42 @@ async def fetch_pdf_stream(url: str, range_header: Optional[str] = None):
 
 @app.get("/pdf")
 async def pdf_proxy(
+    request: Request,
     url: Optional[str] = Query(None),
     id: Optional[str] = Query(None),
 ):
-    # Prefer Graph by driveItem id (secure, no public links)
+    range_header = request.headers.get("range")
+
     if id:
-        gen, headers = await fetch_pdf_stream_graph(id)
-        resp_headers = {"Cache-Control": "no-store"}
+        gen, headers, upstream_status = await fetch_pdf_stream_graph(id, range_header=range_header)
+
+        resp_headers = {"Cache-Control": "no-store", "Accept-Ranges": "bytes"}
         if "content-disposition" in headers:
             resp_headers["Content-Disposition"] = headers["content-disposition"]
-        return StreamingResponse(gen(), media_type="application/pdf", headers=resp_headers)
+        if "content-range" in headers:
+            resp_headers["Content-Range"] = headers["content-range"]
+        if "content-length" in headers:
+            resp_headers["Content-Length"] = headers["content-length"]
 
-    # Fallback: legacy URL mode (may 403 on SharePoint)
+        status_code = 206 if range_header and upstream_status == 206 else 200
+        return StreamingResponse(gen(), media_type="application/pdf", headers=resp_headers, status_code=status_code)
+
     if not url:
         raise HTTPException(status_code=400, detail="Provide either ?id=... or ?url=...")
 
-    gen, headers = await fetch_pdf_stream(url)
-    resp_headers = {"Cache-Control": "no-store"}
+    gen, headers, upstream_status = await fetch_pdf_stream(url, range_header=range_header)
+
+    resp_headers = {"Cache-Control": "no-store", "Accept-Ranges": "bytes"}
     if "content-disposition" in headers:
         resp_headers["Content-Disposition"] = headers["content-disposition"]
-    return StreamingResponse(gen(), media_type="application/pdf", headers=resp_headers)
+    if "content-range" in headers:
+        resp_headers["Content-Range"] = headers["content-range"]
+    if "content-length" in headers:
+        resp_headers["Content-Length"] = headers["content-length"]
+
+    status_code = 206 if range_header and upstream_status == 206 else 200
+    return StreamingResponse(gen(), media_type="application/pdf", headers=resp_headers, status_code=status_code)
+
 
 
 
