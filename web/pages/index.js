@@ -118,7 +118,8 @@ export default function Home() {
       const mod = await import("pdfjs-dist/legacy/build/pdf");
       if (cancelled) return;
 
-      mod.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+      mod.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+
 
       pdfjsRef.current = mod;
     })().catch((e) => {
