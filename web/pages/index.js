@@ -204,12 +204,13 @@ async function onSelect(row) {
   const pdfUrl = pickField(row, ["pdfWebUrl", "pdf_web_url", "pdfUrl", "PDF_URL"]);
   const quote = pickField(row, ["sourceQuote", "source_quote", "SourceQuote", "SOURCEQUOTE"]);
 
-  let proxied = null;
-  if (oneDriveId) {
-    proxied = `${API}/pdf?id=${encodeURIComponent(oneDriveId)}`;
-  } else if (pdfUrl) {
-    proxied = `${API}/pdf?url=${encodeURIComponent(pdfUrl)}`; // fallback
-  } else {
+if (oneDriveId) {
+  // dodajemy też url jako fallback dla /shares
+  proxied = `${API}/pdf?id=${encodeURIComponent(oneDriveId)}&url=${encodeURIComponent(pdfUrl || "")}`;
+} else if (pdfUrl) {
+  proxied = `${API}/pdf?url=${encodeURIComponent(pdfUrl)}`;
+}
+ else {
     setPdfMessage("Brak onedriveId i brak URL do PDF w rekordzie.");
     return;
   }
