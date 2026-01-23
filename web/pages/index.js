@@ -216,7 +216,13 @@ async function onSelect(row) {
 
   setLoadingPdf(true);
   try {
-    const doc = await pdfjsLib.getDocument({ url: proxied }).promise;
+    const doc = await pdfjsLib
+  .getDocument({
+    url: proxied,
+    disableRange: true,
+    disableStream: true,
+  })
+  .promise;
     setPdfDoc(doc);
 
     if (!quote) {
