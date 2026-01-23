@@ -3,6 +3,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 import time
 from urllib.parse import quote
+
 import pyodbc
 import httpx
 from fastapi import FastAPI, HTTPException, Query
@@ -24,10 +25,6 @@ MSSQL_USER = env("MSSQL_USER")
 MSSQL_PASSWORD = env("MSSQL_PASSWORD")
 MSSQL_TABLE = env("MSSQL_TABLE", "dbo.krakowiakZamowienian8n")
 MSSQL_PK = env("MSSQL_PK", "Id")
-MS_TENANT_ID = os.getenv("MS_TENANT_ID")
-MS_CLIENT_ID = os.getenv("MS_CLIENT_ID")
-MS_CLIENT_SECRET = os.getenv("MS_CLIENT_SECRET")
-MS_DRIVE_ID = os.getenv("MS_DRIVE_ID")
 
 SOURCEQUOTE_COLUMN = env("SOURCEQUOTE_COLUMN", "sourceQuote")
 
@@ -153,7 +150,6 @@ def meta():
     }
 
 
-# ✅ NOWE: diagnostyka (bez hasła)
 @app.get("/diag")
 def diag():
     cols = fetch_table_columns()
@@ -179,6 +175,26 @@ def diag():
         "pk": MSSQL_PK,
         "count": cnt,
         "column_flags": flags,
+    }
+
+
+# ✅ NOWE: diagnostyka Graph (bez sekretów)
+@app.get("/diag_graph")
+def diag_graph():
+    drive_id = os.getenv("MS_DRIVE_ID") or ""
+    tenant_id = os.getenv("MS_TENANT_ID") or ""
+    client_id = os.getenv("MS_CLIENT_ID") or ""
+    client_secret = os.getenv("MS_CLIENT_SECRET") or ""
+
+    return {
+        "has_ms_drive_id": bool(drive_id.strip()),
+        "ms_drive_id_prefix": (drive_id[:6] + "...") if drive_id.strip() else None,
+        "has_ms_tenant_id": bool(tenant_id.strip()),
+        "ms_tenant_id_prefix": (tenant_id[:6] + "...") if tenant_id.strip() else None,
+        "has_ms_client_id": bool(client_id.strip()),
+        "ms_client_id_prefix": (client_id[:6] + "...") if client_id.strip() else None,
+        "has_ms_client_secret": bool(client_secret.strip()),
+        "ms_client_secret_prefix": (client_secret[:3] + "...") if client_secret.strip() else None,
     }
 
 
@@ -291,10 +307,17 @@ def set_status(id: int, status: str = Query(..., pattern="^(new|confirmed|reject
 
     return {"ok": True, "id": id, "status": status}
 
+
 _graph_token = {"value": None, "exp": 0}
 
+
 async def graph_token() -> str:
-    if not (MS_TENANT_ID and MS_CLIENT_ID and MS_CLIENT_SECRET):
+    # ✅ runtime env (nie przy starcie procesu)
+    tenant_id = os.getenv("MS_TENANT_ID")
+    client_id = os.getenv("MS_CLIENT_ID")
+    client_secret = os.getenv("MS_CLIENT_SECRET")
+
+    if not (tenant_id and client_id and client_secret):
         raise HTTPException(
             status_code=500,
             detail="Missing Graph env: MS_TENANT_ID/MS_CLIENT_ID/MS_CLIENT_SECRET",
@@ -304,10 +327,10 @@ async def graph_token() -> str:
     if _graph_token["value"] and now < _graph_token["exp"] - 60:
         return _graph_token["value"]
 
-    token_url = f"https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token"
+    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
     data = {
-        "client_id": MS_CLIENT_ID,
-        "client_secret": MS_CLIENT_SECRET,
+        "client_id": client_id,
+        "client_secret": client_secret,
         "grant_type": "client_credentials",
         "scope": "https://graph.microsoft.com/.default",
     }
@@ -325,13 +348,15 @@ async def graph_token() -> str:
 
 
 async def fetch_pdf_stream_graph(item_id: str):
-    if not MS_DRIVE_ID:
+    # ✅ runtime env (nie przy starcie procesu)
+    drive_id = os.getenv("MS_DRIVE_ID")
+    if not drive_id:
         raise HTTPException(status_code=500, detail="Missing Graph env: MS_DRIVE_ID")
 
     token = await graph_token()
 
     # /content does redirect to a pre-authenticated download URL; follow_redirects=True handles it
-    url = f"https://graph.microsoft.com/v1.0/drives/{MS_DRIVE_ID}/items/{quote(item_id)}/content"
+    url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{quote(item_id)}/content"
     headers = {"Authorization": f"Bearer {token}"}
 
     async with httpx.AsyncClient(
@@ -342,7 +367,8 @@ async def fetch_pdf_stream_graph(item_id: str):
         r = await client.get(url, headers=headers)
 
     if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"Graph download failed: HTTP {r.status_code}")
+        # warto dopiąć tekst odpowiedzi (ucięty), żeby szybciej diagnozować 401/403/404
+        raise HTTPException(status_code=502, detail=f"Graph download failed: HTTP {r.status_code} {r.text[:200]}")
 
     ctype = (r.headers.get("content-type") or "").lower()
     first = r.content[:4] if r.content else b""
