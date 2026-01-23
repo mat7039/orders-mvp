@@ -275,14 +275,30 @@ setTimeout(() => {
 
 
   async function renderPage() {
+  try {
+    console.log("renderPage()", {
+      hasPdfDoc: !!pdfDoc,
+      pageNumber,
+      highlights: highlightSpanIndexes.length,
+    });
+
     if (!pdfDoc) return;
 
     const pdfjsLib = pdfjsRef.current;
-    if (!pdfjsLib) return;
+    if (!pdfjsLib) {
+      console.warn("renderPage: pdfjsRef.current is null");
+      setPdfMessage("pdf.js nie jest jeszcze gotowy.");
+      return;
+    }
 
     const canvas = canvasRef.current;
     const textLayerDiv = textLayerRef.current;
-    if (!canvas || !textLayerDiv) return;
+
+    if (!canvas || !textLayerDiv) {
+      console.warn("renderPage: missing canvas/textLayer refs", { canvas, textLayerDiv });
+      setPdfMessage("Brak canvas/textLayer (ref).");
+      return;
+    }
 
     const page = await pdfDoc.getPage(pageNumber);
     const viewport = page.getViewport({ scale: 1.35 });
@@ -290,6 +306,8 @@ setTimeout(() => {
     const ctx = canvas.getContext("2d");
     canvas.width = viewport.width;
     canvas.height = viewport.height;
+
+    console.log("canvas size", canvas.width, canvas.height);
 
     textLayerDiv.innerHTML = "";
     textLayerDiv.style.position = "absolute";
@@ -324,7 +342,12 @@ setTimeout(() => {
 
       textLayerDiv.appendChild(span);
     });
+  } catch (e) {
+    console.error("renderPage failed", e);
+    setPdfMessage("renderPage failed: " + (e?.message || String(e)));
   }
+}
+
 
   useEffect(() => {
     renderPage().catch((e) => console.error(e));
