@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import * as pdfjsLib from "pdfjs-dist/build/pdf";
+
 function getApiBase() {
   // 1) jeśli jednak masz NEXT_PUBLIC_API_URL i działa – użyj
   const envApi = process.env.NEXT_PUBLIC_API_URL;
@@ -118,10 +118,9 @@ export default function Home() {
       const mod = await import("pdfjs-dist/legacy/build/pdf");
       if (cancelled) return;
 
-      pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+mod.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
 
-
-      pdfjsRef.current = mod;
+pdfjsRef.current = mod;
     })().catch((e) => {
       console.error("Failed to load pdfjs", e);
       setPdfMessage("Nie udało się załadować pdf.js (sprawdź logi przeglądarki).");
