@@ -204,13 +204,19 @@ async function onSelect(row) {
   const pdfUrl = pickField(row, ["pdfWebUrl", "pdf_web_url", "pdfUrl", "PDF_URL"]);
   const quote = pickField(row, ["sourceQuote", "source_quote", "SourceQuote", "SOURCEQUOTE"]);
 
-if (oneDriveId) {
-  // dodajemy też url jako fallback dla /shares
-  proxied = `${API}/pdf?id=${encodeURIComponent(oneDriveId)}&url=${encodeURIComponent(pdfUrl || "")}`;
-} else if (pdfUrl) {
-  proxied = `${API}/pdf?url=${encodeURIComponent(pdfUrl)}`;
-}
- else {
+  // <<< TO jest kluczowe: proxied musi być zadeklarowane tutaj >>>
+  let proxied = null;
+
+  if (oneDriveId) {
+    // dodaj url jako fallback dla /shares jeśli jest dostępny
+    if (pdfUrl) {
+      proxied = `${API}/pdf?id=${encodeURIComponent(oneDriveId)}&url=${encodeURIComponent(pdfUrl)}`;
+    } else {
+      proxied = `${API}/pdf?id=${encodeURIComponent(oneDriveId)}`;
+    }
+  } else if (pdfUrl) {
+    proxied = `${API}/pdf?url=${encodeURIComponent(pdfUrl)}`;
+  } else {
     setPdfMessage("Brak onedriveId i brak URL do PDF w rekordzie.");
     return;
   }
@@ -218,17 +224,14 @@ if (oneDriveId) {
   setLoadingPdf(true);
   try {
     const doc = await pdfjsLib
-  .getDocument({
-    url: proxied,
-    disableRange: true,
-    disableStream: true,
-  })
-  .promise;
+      .getDocument({
+        url: proxied,
+        disableRange: true,
+        disableStream: true,
+      })
+      .promise;
+
     setPdfDoc(doc);
-  // MVP: wymuś render po załadowaniu dokumentu
-setTimeout(() => {
-  renderPage().catch((e) => console.error("renderPage after load failed", e));
-}, 0);
 
     if (!quote) {
       setPdfMessage("Brak sourceQuote — pokazuję PDF bez podświetlenia.");
@@ -267,11 +270,12 @@ setTimeout(() => {
     }
   } catch (e) {
     console.error(e);
-    setPdfMessage("Nie udało się załadować PDF (proxy/OneDrive/format). Sprawdź logi API.");
+    setPdfMessage("Nie udało się załadować PDF (pdf.js/proxy/format). Sprawdź konsolę.");
   } finally {
     setLoadingPdf(false);
   }
 }
+
 
 
   async function renderPage() {
