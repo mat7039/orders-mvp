@@ -201,7 +201,7 @@ async function onSelect(row) {
   }
 
   const oneDriveId = pickField(row, ["onedriveId", "onedrive_id", "OneDriveId"]);
-  const pdfUrl = pickField(row, ["pdfWebUrl", "pdf_web_url", "pdfUrl", "PDF_URL", "pdf_web_url"]);
+  const pdfUrl = pickField(row, ["pdfWebUrl", "pdf_web_url", "pdfUrl", "PDF_URL"]);
   const quote = pickField(row, ["sourceQuote", "source_quote", "SourceQuote", "SOURCEQUOTE"]);
 
   let proxied = null;
@@ -241,9 +241,7 @@ async function onSelect(row) {
         const start = idx;
         const end = idx + target.length - 1;
         const spanSet = new Set();
-        for (let k = start; k <= end && k < map.length; k++) {
-          spanSet.add(map[k]);
-        }
+        for (let k = start; k <= end && k < map.length; k++) spanSet.add(map[k]);
         setHighlightSpanIndexes(Array.from(spanSet.values()));
         setPageNumber(p);
         setPdfMessage(`Znaleziono cytat na stronie ${p}.`);
@@ -264,70 +262,6 @@ async function onSelect(row) {
   }
 }
 
-
-const oneDriveId = pickField(row, ["onedriveId", "onedrive_id", "OneDriveId"]);
-const pdfUrl = pickField(row, ["pdfWebUrl", "pdf_web_url", "pdfUrl", "PDF_URL", "pdf_web_url"]);
-const quote = pickField(row, ["sourceQuote", "source_quote", "SourceQuote", "SOURCEQUOTE"]);
-
-let proxied = null;
-if (oneDriveId) {
-  proxied = `${API}/pdf?id=${encodeURIComponent(oneDriveId)}`;
-} else if (pdfUrl) {
-  proxied = `${API}/pdf?url=${encodeURIComponent(pdfUrl)}`; // fallback
-} else {
-  setPdfMessage("Brak onedriveId i brak URL do PDF w rekordzie.");
-  return;
-}
-
-const doc = await pdfjsLib.getDocument({ url: proxied }).promise;
-setPdfDoc(doc);
-
-      setPdfDoc(doc);
-
-      if (!quote) {
-        setPdfMessage("Brak sourceQuote — pokazuję PDF bez podświetlenia.");
-        setPageNumber(1);
-        return;
-      }
-
-      const maxPages = Math.min(doc.numPages, meta?.pdf_max_pages_scan || 50);
-      const target = normalizeText(quote);
-
-      let found = false;
-      for (let p = 1; p <= maxPages; p++) {
-        const page = await doc.getPage(p);
-        const textContent = await page.getTextContent();
-        const spans = textContent.items.map((it) => it.str || "");
-
-        const { normStr, map } = buildNormalizedWithSpanMap(spans);
-        const idx = normStr.indexOf(target);
-
-        if (idx >= 0) {
-          const start = idx;
-          const end = idx + target.length - 1;
-          const spanSet = new Set();
-          for (let k = start; k <= end && k < map.length; k++) {
-            spanSet.add(map[k]);
-          }
-          setHighlightSpanIndexes(Array.from(spanSet.values()));
-          setPageNumber(p);
-          setPdfMessage(`Znaleziono cytat na stronie ${p}.`);
-          found = true;
-          break;
-        }
-      }
-
-      if (!found) {
-        setPdfMessage(`Nie znaleziono cytatu w limicie ${meta?.pdf_max_pages_scan || 50} stron.`);
-        setPageNumber(1);
-      }
-    } catch (e) {
-      console.error(e);
-      setPdfMessage("Nie udało się załadować PDF (proxy/OneDrive/format). Sprawdź logi API.");
-    } finally {
-      setLoadingPdf(false);
-    }
-  }
 
   async function renderPage() {
     if (!pdfDoc) return;
