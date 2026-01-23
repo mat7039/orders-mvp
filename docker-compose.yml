@@ -17,6 +17,11 @@ services:
       MSSQL_PASSWORD: "${MSSQL_PASSWORD}"
       MSSQL_TABLE: "dbo.krakowiakZamowienian8n"
       MSSQL_PK: "Id"   # np. "Id"
+      # ---- Microsoft Graph ---- 
+      MS_TENANT_ID: "${MS_TENANT_ID}" 
+      MS_CLIENT_ID: "${MS_CLIENT_ID}" 
+      MS_CLIENT_SECRET: "${MS_CLIENT_SECRET}" 
+      MS_DRIVE_ID: "${MS_DRIVE_ID}
 
       # ---- Kolumny biznesowe (domyślne) ----
       SOURCEQUOTE_COLUMN: "sourceQuote"
