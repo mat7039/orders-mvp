@@ -3,6 +3,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 import time
 from urllib.parse import quote
+import base64
 
 import pyodbc
 import httpx
@@ -18,6 +19,9 @@ def env(name: str, default: Optional[str] = None) -> str:
     return v
 
 
+# --------------------------
+# Config (DB, columns, CORS)
+# --------------------------
 MSSQL_SERVER = env("MSSQL_SERVER")
 MSSQL_PORT = env("MSSQL_PORT", "1433")
 MSSQL_DB = env("MSSQL_DB")
@@ -27,17 +31,12 @@ MSSQL_TABLE = env("MSSQL_TABLE", "dbo.krakowiakZamowienian8n")
 MSSQL_PK = env("MSSQL_PK", "Id")
 
 SOURCEQUOTE_COLUMN = env("SOURCEQUOTE_COLUMN", "sourceQuote")
-
-# ✅ U Ciebie jest pdfWebUrl (camelCase)
 PDF_URL_COLUMN = env("PDF_URL_COLUMN", "pdfWebUrl")
-
 STATUS_COLUMN = env("STATUS_COLUMN", "Status")
-
-# ✅ U Ciebie jest Klient (duże K)
 CLIENT_COLUMN = env("CLIENT_COLUMN", "Klient")
 
 CORS_ALLOW_ORIGINS = env("CORS_ALLOW_ORIGINS", "*")
-PDF_MAX_PAGES_SCAN = int(env("PDF_MAX_PAGES_SCAN", "50"))  # used by UI; API returns it in /meta
+PDF_MAX_PAGES_SCAN = int(env("PDF_MAX_PAGES_SCAN", "50"))
 
 
 def build_conn_str() -> str:
@@ -116,6 +115,9 @@ def validate_config_columns(existing_cols: List[str]) -> Dict[str, bool]:
     }
 
 
+# -------------
+# FastAPI app
+# -------------
 app = FastAPI(title="Orders MVP API")
 
 origins = [o.strip() for o in CORS_ALLOW_ORIGINS.split(",")] if CORS_ALLOW_ORIGINS != "*" else ["*"]
@@ -154,7 +156,6 @@ def meta():
 def diag():
     cols = fetch_table_columns()
     flags = validate_config_columns(cols)
-
     table_sql = safe_table(MSSQL_TABLE)
 
     with get_conn() as conn:
@@ -178,14 +179,12 @@ def diag():
     }
 
 
-# ✅ NOWE: diagnostyka Graph (bez sekretów)
 @app.get("/diag_graph")
 def diag_graph():
     drive_id = os.getenv("MS_DRIVE_ID") or ""
     tenant_id = os.getenv("MS_TENANT_ID") or ""
     client_id = os.getenv("MS_CLIENT_ID") or ""
     client_secret = os.getenv("MS_CLIENT_SECRET") or ""
-
     return {
         "has_ms_drive_id": bool(drive_id.strip()),
         "ms_drive_id_prefix": (drive_id[:6] + "...") if drive_id.strip() else None,
@@ -198,6 +197,9 @@ def diag_graph():
     }
 
 
+# --------------------------
+# Orders endpoints
+# --------------------------
 @app.get("/orders")
 def list_orders(
     page: int = Query(1, ge=1),
@@ -308,11 +310,13 @@ def set_status(id: int, status: str = Query(..., pattern="^(new|confirmed|reject
     return {"ok": True, "id": id, "status": status}
 
 
+# --------------------------
+# Microsoft Graph helpers
+# --------------------------
 _graph_token = {"value": None, "exp": 0}
 
 
 async def graph_token() -> str:
-    # ✅ runtime env (nie przy starcie procesu)
     tenant_id = os.getenv("MS_TENANT_ID")
     client_id = os.getenv("MS_CLIENT_ID")
     client_secret = os.getenv("MS_CLIENT_SECRET")
@@ -347,7 +351,15 @@ async def graph_token() -> str:
     return _graph_token["value"]
 
 
-async def fetch_pdf_stream_graph(item_id: str, range_header: Optional[str] = None):
+def to_graph_share_id(raw_url: str) -> str:
+    # Graph expects: u!{base64url(url)}
+    b = raw_url.encode("utf-8")
+    s = base64.b64encode(b).decode("ascii")
+    s = s.replace("+", "-").replace("/", "_").rstrip("=")
+    return f"u!{s}"
+
+
+async def fetch_pdf_stream_graph_item(item_id: str, range_header: Optional[str] = None):
     drive_id = os.getenv("MS_DRIVE_ID")
     if not drive_id:
         raise HTTPException(status_code=500, detail="Missing Graph env: MS_DRIVE_ID")
@@ -372,7 +384,6 @@ async def fetch_pdf_stream_graph(item_id: str, range_header: Optional[str] = Non
     if r.status_code >= 400:
         raise HTTPException(status_code=502, detail=f"Graph download failed: HTTP {r.status_code} {r.text[:200]}")
 
-    # Graph przy Range zwykle zwróci 206 i Content-Range
     ctype = (r.headers.get("content-type") or "").lower()
     first = r.content[:4] if r.content else b""
     is_pdf = ("application/pdf" in ctype) or (first == b"%PDF")
@@ -385,7 +396,43 @@ async def fetch_pdf_stream_graph(item_id: str, range_header: Optional[str] = Non
     return gen, r.headers, r.status_code
 
 
+async def fetch_pdf_stream_graph_share(pdf_web_url: str, range_header: Optional[str] = None):
+    token = await graph_token()
 
+    share_id = to_graph_share_id(pdf_web_url)
+    url = f"https://graph.microsoft.com/v1.0/shares/{share_id}/driveItem/content"
+
+    req_headers = {
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "orders-mvp/1.0",
+    }
+    if range_header:
+        req_headers["Range"] = range_header
+
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=httpx.Timeout(120.0, connect=20.0),
+    ) as client:
+        r = await client.get(url, headers=req_headers)
+
+    if r.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Graph share download failed: HTTP {r.status_code} {r.text[:200]}")
+
+    ctype = (r.headers.get("content-type") or "").lower()
+    first = r.content[:4] if r.content else b""
+    is_pdf = ("application/pdf" in ctype) or (first == b"%PDF")
+    if not is_pdf:
+        raise HTTPException(status_code=502, detail=f"Graph returned non-PDF (content-type={ctype or 'unknown'})")
+
+    async def gen():
+        yield r.content
+
+    return gen, r.headers, r.status_code
+
+
+# --------------------------
+# Legacy direct-url fetch (fallback)
+# --------------------------
 def candidate_download_urls(url: str) -> List[str]:
     cands = [url]
 
@@ -416,11 +463,24 @@ async def fetch_pdf_stream(url: str, range_header: Optional[str] = None):
                     req_headers["Range"] = range_header
 
                 r = await client.get(u, headers=req_headers)
-                ...
+
+                ctype = (r.headers.get("content-type") or "").lower()
+                first = r.content[:4] if r.content else b""
+                is_pdf = ("application/pdf" in ctype) or (first == b"%PDF")
+
+                if r.status_code >= 400:
+                    last_error = f"HTTP {r.status_code}"
+                    continue
+
+                if not is_pdf:
+                    last_error = f"Not a PDF (content-type={ctype or 'unknown'})"
+                    continue
+
                 async def gen():
                     yield r.content
 
                 return gen, r.headers, r.status_code
+
             except Exception as e:
                 last_error = str(e)
                 continue
@@ -428,7 +488,9 @@ async def fetch_pdf_stream(url: str, range_header: Optional[str] = None):
         raise HTTPException(status_code=502, detail=f"Could not fetch PDF from url. Last error: {last_error}")
 
 
-
+# --------------------------
+# /pdf endpoint (Graph + Range + fallbacks)
+# --------------------------
 @app.get("/pdf")
 async def pdf_proxy(
     request: Request,
@@ -437,10 +499,12 @@ async def pdf_proxy(
 ):
     range_header = request.headers.get("range")
 
-    if id:
-        gen, headers, upstream_status = await fetch_pdf_stream_graph(id, range_header=range_header)
-
-        resp_headers = {"Cache-Control": "no-store", "Accept-Ranges": "bytes"}
+    def build_response(gen, headers: Dict[str, str], upstream_status: int):
+        resp_headers = {
+            "Cache-Control": "no-store",
+            "Accept-Ranges": "bytes",
+        }
+        # Forward a few useful headers if present
         if "content-disposition" in headers:
             resp_headers["Content-Disposition"] = headers["content-disposition"]
         if "content-range" in headers:
@@ -451,21 +515,30 @@ async def pdf_proxy(
         status_code = 206 if range_header and upstream_status == 206 else 200
         return StreamingResponse(gen(), media_type="application/pdf", headers=resp_headers, status_code=status_code)
 
+    # Prefer Graph by item id (secure)
+    if id:
+        # 1) try driveId + itemId
+        try:
+            gen, headers, upstream_status = await fetch_pdf_stream_graph_item(id, range_header=range_header)
+            return build_response(gen, headers, upstream_status)
+        except HTTPException as e:
+            # If it's 404 itemNotFound from Graph, and we have a webUrl, try shares-based fallback
+            msg = str(e.detail) if hasattr(e, "detail") else ""
+            is_item_not_found = "itemNotFound" in msg or "HTTP 404" in msg
+
+            if is_item_not_found and url:
+                gen2, headers2, upstream_status2 = await fetch_pdf_stream_graph_share(url, range_header=range_header)
+                return build_response(gen2, headers2, upstream_status2)
+
+            raise
+
+    # Fallback: legacy URL mode (may 403 on SharePoint if not Graph)
     if not url:
         raise HTTPException(status_code=400, detail="Provide either ?id=... or ?url=...")
 
     gen, headers, upstream_status = await fetch_pdf_stream(url, range_header=range_header)
+    return build_response(gen, headers, upstream_status)
 
-    resp_headers = {"Cache-Control": "no-store", "Accept-Ranges": "bytes"}
-    if "content-disposition" in headers:
-        resp_headers["Content-Disposition"] = headers["content-disposition"]
-    if "content-range" in headers:
-        resp_headers["Content-Range"] = headers["content-range"]
-    if "content-length" in headers:
-        resp_headers["Content-Length"] = headers["content-length"]
-
-    status_code = 206 if range_header and upstream_status == 206 else 200
-    return StreamingResponse(gen(), media_type="application/pdf", headers=resp_headers, status_code=status_code)
 
 
 
