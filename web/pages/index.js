@@ -225,6 +225,10 @@ if (oneDriveId) {
   })
   .promise;
     setPdfDoc(doc);
+  // MVP: wymuś render po załadowaniu dokumentu
+setTimeout(() => {
+  renderPage().catch((e) => console.error("renderPage after load failed", e));
+}, 0);
 
     if (!quote) {
       setPdfMessage("Brak sourceQuote — pokazuję PDF bez podświetlenia.");
