@@ -48,6 +48,55 @@ function normalizeText(s) {
  * - map: normIndex -> spanIdx
  * MVP: highlightujemy całe spany, nie dokładny zakres znaków.
  */
+const STOP_TOKENS = new Set([
+  "pcs", "pc", "eur", "pln", "net", "gross", "qty", "szt", "kg", "mm", "cm", "m",
+]);
+
+function normalizeForSearch(s) {
+  if (!s) return "";
+  return s
+    .split("")
+    .map(normChar)
+    .join("")
+    .toLowerCase()
+    .replace(/\u00ad/g, "")   // soft hyphen
+    .replace(/\s+/g, "");     // usuń WSZYSTKIE spacje/enter
+}
+
+function tokenWeight(t) {
+  const hasDigit = /\d/.test(t);
+  const hasDash = t.includes("-");
+  if (hasDigit && hasDash) return 3;
+  if (hasDigit) return 2;
+  return 1;
+}
+
+function quoteTokens(quote) {
+  const raw = (quote || "")
+    .toLowerCase()
+    .replace(/\u00ad/g, "");
+
+  // tokeny typu 51139009-03, 0187-200-599, plate, stiffener
+  const tokens = raw.match(/[a-z0-9]+(?:-[a-z0-9]+)*/g) || [];
+
+  const seen = new Set();
+  const uniq = [];
+  for (const t of tokens) {
+    if (t.length < 3) continue;
+    if (STOP_TOKENS.has(t)) continue;
+    if (!seen.has(t)) {
+      seen.add(t);
+      uniq.push(t);
+    }
+  }
+
+  // priorytet: kody/numery
+  uniq.sort((a, b) => tokenWeight(b) - tokenWeight(a));
+
+  // limit żeby nie skanować 1000 tokenów
+  return uniq.slice(0, 12);
+}
+
 function buildNormalizedWithSpanMap(spanTexts) {
   let norm = "";
   const map = []; // norm char index -> spanIdx
@@ -227,43 +276,91 @@ async function onSelect(row) {
     const doc = await pdfjsLib
       .getDocument({
         url: proxied,
-        disableRange: true,
-        disableStream: true,
+        disableRange: false,
+        disableStream: false,
+
       })
       .promise;
 
     setPdfDoc(doc);
 
-    if (!quote) {
-      setPdfMessage("Brak sourceQuote — pokazuję PDF bez podświetlenia.");
-      setPageNumber(1);
-      return;
+const maxPages = Math.min(doc.numPages, meta?.pdf_max_pages_scan || 50);
+
+const tokens = quoteTokens(quote);
+if (tokens.length === 0) {
+  setPdfMessage("sourceQuote jest puste lub nie daje tokenów — pokazuję PDF bez highlight.");
+  setPageNumber(1);
+  return;
+}
+
+let bestPage = 1;
+let bestScore = -1;
+let bestHits = [];
+
+for (let p = 1; p <= maxPages; p++) {
+  const page = await doc.getPage(p);
+  const textContent = await page.getTextContent();
+  const spans = textContent.items.map((it) => it.str || "");
+  const joined = normalizeForSearch(spans.join(" "));
+
+  let score = 0;
+  const hits = [];
+
+  for (const t of tokens) {
+    const nt = normalizeForSearch(t);
+    if (!nt) continue;
+    if (joined.includes(nt)) {
+      score += tokenWeight(t);
+      hits.push(t);
     }
+  }
 
-    const maxPages = Math.min(doc.numPages, meta?.pdf_max_pages_scan || 50);
-    const target = normalizeText(quote);
+  if (score > bestScore) {
+    bestScore = score;
+    bestPage = p;
+    bestHits = hits;
+  }
 
-    let found = false;
-    for (let p = 1; p <= maxPages; p++) {
-      const page = await doc.getPage(p);
-      const textContent = await page.getTextContent();
-      const spans = textContent.items.map((it) => it.str || "");
+  // szybki exit: jeśli trafiliśmy mocno (np. kod + jeszcze coś), nie ma sensu lecieć dalej
+  if (bestScore >= 6) break;
+}
 
-      const { normStr, map } = buildNormalizedWithSpanMap(spans);
-      const idx = normStr.indexOf(target);
+// próg dopasowania (tuning MVP)
+if (bestScore < 4) {
+  setPdfMessage(`Nie znaleziono dopasowania (tokeny) w limicie ${maxPages} stron. Najlepszy score=${bestScore} na stronie ${bestPage}.`);
+  setPageNumber(1);
+  return;
+}
 
-      if (idx >= 0) {
-        const start = idx;
-        const end = idx + target.length - 1;
-        const spanSet = new Set();
-        for (let k = start; k <= end && k < map.length; k++) spanSet.add(map[k]);
-        setHighlightSpanIndexes(Array.from(spanSet.values()));
-        setPageNumber(p);
-        setPdfMessage(`Znaleziono cytat na stronie ${p}.`);
-        found = true;
+// ustaw stronę
+setPageNumber(bestPage);
+setPdfMessage(`Dopasowanie po tokenach na stronie ${bestPage} (score=${bestScore}): ${bestHits.join(", ")}`);
+
+// zbuduj highlight spanów na tej stronie
+{
+  const page = await doc.getPage(bestPage);
+  const textContent = await page.getTextContent();
+  const spans = textContent.items.map((it) => it.str || "");
+
+  const wanted = bestHits
+    .map((t) => normalizeForSearch(t))
+    .filter(Boolean);
+
+  const spanSet = new Set();
+  for (let i = 0; i < spans.length; i++) {
+    const ns = normalizeForSearch(spans[i]);
+    if (!ns) continue;
+    for (const w of wanted) {
+      if (ns.includes(w)) {
+        spanSet.add(i);
         break;
       }
     }
+  }
+
+  setHighlightSpanIndexes([...spanSet]);
+}
+
 
     if (!found) {
       setPdfMessage(`Nie znaleziono cytatu w limicie ${meta?.pdf_max_pages_scan || 50} stron.`);
@@ -306,28 +403,33 @@ async function onSelect(row) {
     }
 
     const page = await pdfDoc.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 1.35 });
+    const scale = 1.35;
+const viewport = page.getViewport({ scale });
 
-    const ctx = canvas.getContext("2d");
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
+const outputScale = (typeof window !== "undefined" && window.devicePixelRatio) ? window.devicePixelRatio : 1;
 
-    console.log("canvas size", canvas.width, canvas.height);
+const ctx = canvas.getContext("2d");
+canvas.width = Math.floor(viewport.width * outputScale);
+canvas.height = Math.floor(viewport.height * outputScale);
 
-    textLayerDiv.innerHTML = "";
-    textLayerDiv.style.position = "absolute";
-    textLayerDiv.style.left = "0";
-    textLayerDiv.style.top = "0";
-    textLayerDiv.style.width = `${viewport.width}px`;
-    textLayerDiv.style.height = `${viewport.height}px`;
+canvas.style.width = `${viewport.width}px`;
+canvas.style.height = `${viewport.height}px`;
 
-    await page.render({ canvasContext: ctx, viewport }).promise;
+ctx.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+
+await page.render({ canvasContext: ctx, viewport }).promise;
+
 
     const textContent = await page.getTextContent();
 
     textContent.items.forEach((item, idx) => {
       const span = document.createElement("span");
       span.textContent = item.str || "";
+      span.style.color = "transparent";
+      span.style.webkitTextFillColor = "transparent";
+      span.style.textShadow = "none";
+      span.style.pointerEvents = "none";
+      span.style.lineHeight = "1";
       span.style.position = "absolute";
       span.style.whiteSpace = "pre";
 
@@ -342,7 +444,8 @@ async function onSelect(row) {
       span.style.transformOrigin = "0 0";
 
       if (highlightSpanIndexes.includes(idx)) {
-        span.style.background = "yellow";
+        span.style.background = "rgba(255,255,0,0.6)";
+
       }
 
       textLayerDiv.appendChild(span);
