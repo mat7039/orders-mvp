@@ -1,0 +1,41 @@
+const fs = require("fs");
+const path = require("path");
+
+function tryCopy() {
+  const candidates = [
+    "node_modules/pdfjs-dist/build/pdf.worker.min.mjs",
+    "node_modules/pdfjs-dist/build/pdf.worker.min.js",
+    "node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+    "node_modules/pdfjs-dist/legacy/build/pdf.worker.min.js",
+  ];
+
+  fs.mkdirSync("public", { recursive: true });
+
+  let src = null;
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      src = p;
+      break;
+    }
+  }
+
+  if (!src) {
+    console.warn("pdf.worker not found in pdfjs-dist; skipping copy");
+    process.exit(0);
+  }
+
+  const dstMjs = path.join("public", "pdf.worker.min.mjs");
+  const dstJs = path.join("public", "pdf.worker.min.js");
+
+  fs.copyFileSync(src, dstMjs);
+  fs.copyFileSync(src, dstJs);
+
+  console.log("Copied", src, "->", dstMjs, "and", dstJs);
+}
+
+try {
+  tryCopy();
+} catch (e) {
+  console.warn("copy worker failed but continuing:", e && e.message ? e.message : e);
+  process.exit(0); // NIE wywalaj builda
+}
