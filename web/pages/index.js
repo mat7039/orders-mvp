@@ -600,11 +600,14 @@ background: isSel ? "#f3f6ff" : "transparent",
   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 10 }}>
     <tbody>
       {[
-        ["Pozycja", selected?.Pozycja ?? selected?.pozycja ?? ""],
-        ["Status", selected?.Status ?? selected?.status ?? ""],
         ["Klient", selected?.Klient ?? selected?.klient ?? ""],
         ["NaszIndeks", selected?.FinalIndeks ?? selected?.finalIndeks ?? ""],
         ["NazwaKlienta", selected?.NazwaKlienta ?? selected?.nazwaKlienta ?? ""],
+        ["NumerRysunku", selected?.nrRys ?? selected?.nrRys ?? ""],
+        ["Oferta", selected?.oferta ?? selected?.oferta ?? ""],
+        ["DataUtworzeniaOferty", selected?.DataUtworzenia ?? selected?.DataUtworzenia ?? ""],
+        ["DataWaznosciOferty", selected?.DataWaznosci ?? selected?.DataWaznosci ?? ""],
+        ["IloscZOferty", selected?.IloscZOferty ?? selected?.IloscZOferty ?? ""],
         ["IloscKlienta", selected?.IloscKlienta ?? selected?.iloscKlienta ?? ""],
         ["CenaOfertowa", selected?.CenaOfertowa ?? selected?.cenaOfertowa ?? ""],
         ["pdfFileName", selected?.pdfFileName ?? selected?.PdfFileName ?? ""],
