@@ -260,7 +260,10 @@ export default function Home() {
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>{pk}</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>Status</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>Klient</th>
-              <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>sourceQuote</th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>FinalIndeks</th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>NazwaKlienta</th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>IloscKlienta</th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>CenaOfertowa</th>
             </tr>
           </thead>
 
@@ -269,7 +272,11 @@ export default function Home() {
               const id = row[pk];
               const status = row.Status ?? row.status ?? "";
               const klient = row.Klient ?? row.klient ?? "";
-              const quoteText = row.sourceQuote ?? "";
+
+              const finalIndeks = row.FinalIndeks ?? row.finalIndeks ?? "";
+              const nazwaKlienta = row.NazwaKlienta ?? row.nazwaKlienta ?? "";
+              const iloscKlienta = row.IloscKlienta ?? row.iloscKlienta ?? "";
+              const cenaOfertowa = row.CenaOfertowa ?? row.cenaOfertowa ?? "";
 
               const isSel = selectedId === id;
 
@@ -282,11 +289,18 @@ export default function Home() {
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{id}</td>
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{status}</td>
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{klient}</td>
+
+                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{finalIndeks}</td>
+
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6, maxWidth: 220 }}>
                     <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {quoteText}
+                      {nazwaKlienta}
                     </div>
                   </td>
+
+                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{iloscKlienta}</td>
+
+                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{cenaOfertowa}</td>
                 </tr>
               );
             })}
