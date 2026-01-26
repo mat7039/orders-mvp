@@ -236,7 +236,7 @@ def list_orders(
     count_sql = f"SELECT COUNT(1) AS cnt FROM {table_sql}{where_sql};"
     items_sql = (
         f"SELECT * FROM {table_sql}{where_sql} "
-        f"ORDER BY {pk_sql} DESC "
+        f"ORDER BY {safe_ident('Klient')} ASC, {safe_ident('Pozycja')} ASC "
         f"OFFSET ? ROWS FETCH NEXT ? ROWS ONLY;"
     )
 
