@@ -18,6 +18,10 @@ services:
       MSSQL_TABLE: "dbo.krakowiakZamowienian8n"
       MSSQL_PK: "Id"
 
+      # ---- OpenAI ----
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      OPENAI_MODEL: "gpt-5"
+
       # ---- Kolumny biznesowe (domyślne) ----
       SOURCEQUOTE_COLUMN: "sourceQuote"
       PDF_URL_COLUMN: "pdfWebUrl"
