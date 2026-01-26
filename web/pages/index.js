@@ -432,7 +432,11 @@ return (
 <React.Fragment key={pdfName}>
 {/* Wiersz-nagłówek grupy */}
 <tr
-onClick={() => setOpenGroups((p) => ({ ...p, [pdfName]: true }))}
+onClick={(e) => {
+  e.stopPropagation(); // żeby klik w pozycję nie zwijał od razu nagłówka grupy
+  setOpenGroups((p) => ({ ...p, [pdfName]: !(p[pdfName] ?? false) })); // toggle grupy
+  onSelect(row);
+}}
 style={{
 cursor: "pointer",
 background: "#f7f7f7",
