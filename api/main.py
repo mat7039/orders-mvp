@@ -1,16 +1,21 @@
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
 import time
-from urllib.parse import quote
 import base64
 import io
-from openai import OpenAI
+import json
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
+
 import pyodbc
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+
+# OpenAI (NOWE)
+from pydantic import BaseModel, Field
+from openai import OpenAI
 
 
 def env(name: str, default: Optional[str] = None) -> str:
@@ -316,14 +321,6 @@ def set_status(id: int, status: str = Query(..., pattern="^(new|confirmed|reject
 # --------------------------
 _graph_token = {"value": None, "exp": 0}
 
-_openai_client = None
-
-def get_openai_client() -> OpenAI:
-    global _openai_client
-    if _openai_client is None:
-        # OPENAI_API_KEY musi być w env
-        _openai_client = OpenAI()
-    return _openai_client
 
 async def graph_token() -> str:
     tenant_id = os.getenv("MS_TENANT_ID")
@@ -374,7 +371,6 @@ async def fetch_pdf_stream_graph_item(item_id: str, range_header: Optional[str] 
         raise HTTPException(status_code=500, detail="Missing Graph env: MS_DRIVE_ID")
 
     token = await graph_token()
-
     url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{quote(item_id)}/content"
 
     req_headers = {
@@ -407,7 +403,6 @@ async def fetch_pdf_stream_graph_item(item_id: str, range_header: Optional[str] 
 
 async def fetch_pdf_stream_graph_share(pdf_web_url: str, range_header: Optional[str] = None):
     token = await graph_token()
-
     share_id = to_graph_share_id(pdf_web_url)
     url = f"https://graph.microsoft.com/v1.0/shares/{share_id}/driveItem/content"
 
@@ -418,49 +413,6 @@ async def fetch_pdf_stream_graph_share(pdf_web_url: str, range_header: Optional[
     if range_header:
         req_headers["Range"] = range_header
 
-async def fetch_pdf_bytes_graph(item_id: str, pdf_web_url: Optional[str] = None) -> bytes:
-    """
-    Pobiera pełny PDF (bytes) przez Graph.
-    1) /drives/{driveId}/items/{itemId}/content
-    2) jeśli itemNotFound i mamy pdf_web_url -> /shares/u!{base64}/driveItem/content
-    """
-    drive_id = os.getenv("MS_DRIVE_ID")
-    if not drive_id:
-        raise HTTPException(status_code=500, detail="Missing Graph env: MS_DRIVE_ID")
-
-    token = await graph_token()
-
-    async def _get(url: str) -> httpx.Response:
-        async with httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=httpx.Timeout(180.0, connect=20.0),
-        ) as client:
-            return await client.get(url, headers={
-                "Authorization": f"Bearer {token}",
-                "User-Agent": "orders-mvp/1.0",
-            })
-
-    # 1) itemId direct
-    url1 = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/items/{quote(item_id)}/content"
-    r = await _get(url1)
-
-    # fallback na shares
-    if r.status_code == 404 and pdf_web_url:
-        share_id = to_graph_share_id(pdf_web_url)
-        url2 = f"https://graph.microsoft.com/v1.0/shares/{share_id}/driveItem/content"
-        r = await _get(url2)
-
-    if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"Graph download failed: HTTP {r.status_code} {r.text[:200]}")
-
-    ctype = (r.headers.get("content-type") or "").lower()
-    first = r.content[:4] if r.content else b""
-    is_pdf = ("application/pdf" in ctype) or (first == b"%PDF")
-    if not is_pdf:
-        raise HTTPException(status_code=502, detail=f"Graph returned non-PDF (content-type={ctype or 'unknown'})")
-
-    return r.content
-    
     async with httpx.AsyncClient(
         follow_redirects=True,
         timeout=httpx.Timeout(120.0, connect=20.0),
@@ -556,7 +508,6 @@ async def pdf_proxy(
             "Cache-Control": "no-store",
             "Accept-Ranges": "bytes",
         }
-        # Forward a few useful headers if present
         if "content-disposition" in headers:
             resp_headers["Content-Disposition"] = headers["content-disposition"]
         if "content-range" in headers:
@@ -574,7 +525,6 @@ async def pdf_proxy(
             gen, headers, upstream_status = await fetch_pdf_stream_graph_item(id, range_header=range_header)
             return build_response(gen, headers, upstream_status)
         except HTTPException as e:
-            # If it's 404 itemNotFound from Graph, and we have a webUrl, try shares-based fallback
             msg = str(e.detail) if hasattr(e, "detail") else ""
             is_item_not_found = "itemNotFound" in msg or "HTTP 404" in msg
 
@@ -592,12 +542,45 @@ async def pdf_proxy(
     return build_response(gen, headers, upstream_status)
 
 
-from pydantic import BaseModel, Field
+# ============================================================
+# OpenAI /match_pdf (NOWE) — page + anchors do highlight
+# ============================================================
+def get_openai_client() -> OpenAI:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("Missing env: OPENAI_API_KEY")
+    return OpenAI(api_key=api_key)
+
+
+async def fetch_pdf_bytes_graph(item_id: str, pdf_web_url: Optional[str] = None) -> bytes:
+    """
+    Pobiera PDF jako bytes z Graph.
+    Najpierw próbuje /drives/{driveId}/items/{id}/content,
+    a jeśli itemNotFound i mamy url -> /shares/{...}/driveItem/content.
+    """
+    try:
+        gen, headers, upstream_status = await fetch_pdf_stream_graph_item(item_id, range_header=None)
+        chunks: List[bytes] = []
+        async for c in gen():
+            chunks.append(c)
+        return b"".join(chunks)
+    except HTTPException as e:
+        msg = str(e.detail) if hasattr(e, "detail") else ""
+        is_item_not_found = "itemNotFound" in msg or "HTTP 404" in msg
+        if is_item_not_found and pdf_web_url:
+            gen2, headers2, upstream_status2 = await fetch_pdf_stream_graph_share(pdf_web_url, range_header=None)
+            chunks: List[bytes] = []
+            async for c in gen2():
+                chunks.append(c)
+            return b"".join(chunks)
+        raise
+
 
 class MatchRequest(BaseModel):
     id: str = Field(..., description="OneDrive item id")
     url: Optional[str] = Field(None, description="pdfWebUrl (opcjonalnie, pomaga w fallback /shares)")
     sourceQuote: str = Field(..., description="Tekst źródłowy z rekordu")
+
 
 class MatchResponse(BaseModel):
     page: int
@@ -605,95 +588,99 @@ class MatchResponse(BaseModel):
     confidence: float
     reason: str
 
+
 @app.post("/match_pdf", response_model=MatchResponse)
 async def match_pdf(req: MatchRequest):
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="Missing env: OPENAI_API_KEY")
+    try:
+        client = get_openai_client()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    model = os.getenv("OPENAI_MODEL", "gpt-5")
+    # polecam lekki model na start; możesz podmienić ENV OPENAI_MODEL na mocniejszy
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-    # 1) pobierz pdf bytes (Graph)
+    # 1) pobierz PDF bytes (Graph)
     pdf_bytes = await fetch_pdf_bytes_graph(req.id, pdf_web_url=req.url)
 
-    # OpenAI PDF input limit per request: 50MB total across files (dla jednego requestu) :contentReference[oaicite:1]{index=1}
+    # 2) limit bezpieczeństwa
     if len(pdf_bytes) > 45 * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"PDF too large for model input: {len(pdf_bytes)} bytes")
 
-    client = get_openai_client()
-
-    # 2) upload file jako user_data (rekomendowane do użycia jako input) :contentReference[oaicite:2]{index=2}
+    # 3) upload pliku (user_data)
     file_obj = client.files.create(
         file=("doc.pdf", io.BytesIO(pdf_bytes)),
         purpose="user_data",
-        # opcjonalnie auto-wygaszenie (tu 24h)
-        expires_after={"anchor": "created_at", "seconds": 86400},
     )
 
+    # Structured Outputs dla Responses API: text.format=json_schema (NOWY styl)
     schema = {
-        "name": "pdf_match",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "page": {"type": "integer", "minimum": 1, "description": "Page number (1-indexed) where the quote best matches"},
-                "anchors": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "minItems": 1,
-                    "maxItems": 12,
-                    "description": "Short anchor strings to highlight on that page (codes, product numbers, key words, amounts)."
-                },
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                "reason": {"type": "string"}
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "page": {"type": "integer", "minimum": 1},
+            "anchors": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 12,
             },
-            "required": ["page", "anchors", "confidence", "reason"]
-        }
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "reason": {"type": "string"},
+        },
+        "required": ["page", "anchors", "confidence", "reason"],
     }
 
     prompt = f"""
 You are matching a record's sourceQuote to the location in a PDF document.
 The sourceQuote may differ from the PDF text (different line breaks, spacing, missing/extra words).
+
 Task:
 1) Find the single best page where this quote refers to a line/item.
-2) Return 5-30 short anchor strings that appear on that page and uniquely identify the item (e.g., product numbers, codes with dashes, key words, quantities, prices).
+2) Return 4-10 short anchor strings that appear literally on that page and uniquely identify the item (codes, part numbers, key words, quantities, prices).
+
 Rules:
 - Output MUST follow the JSON schema.
 - Page number must be 1-indexed.
-- Anchors must be short (1-40 chars each) and should be present on the chosen page.
-- Prefer anchors with digits/dashes (e.g., 51139009-03, 0187-200-599, 152815) and key item name words.
+- Anchors must be short (1-40 chars each) and MUST appear literally on the chosen page.
+- VERY IMPORTANT: do NOT return anchors that require joining neighboring fields (avoid "04000-2-36410").
+  If the PDF shows "04000-2-364" and separately "10", return them as separate anchors.
+- Prefer anchors with digits/dashes plus one qty/price token if present.
 
 sourceQuote:
 {req.sourceQuote}
 """.strip()
 
-    # 3) Responses API z Structured Outputs :contentReference[oaicite:3]{index=3}
-    resp = client.responses.create(
-        model=model,
-        response_format={"type": "json_schema", "json_schema": schema},
-        input=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_file", "file_id": file_obj.id},
-                    {"type": "input_text", "text": prompt},
-                ],
-            }
-        ],
-    )
-
-    # SDK zwraca tekst JSON w output_text (bo response_format wymusza JSON)
-    data = resp.output_text
-    # output_text jest stringiem JSON; parsujemy
     try:
-        import json
+        resp = client.responses.create(
+            model=model,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_file", "file_id": file_obj.id},
+                        {"type": "input_text", "text": prompt},
+                    ],
+                }
+            ],
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "pdf_match",
+                    "strict": True,
+                    "schema": schema,
+                }
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"OpenAI call failed: {type(e).__name__}: {str(e)[:300]}")
+
+    data = resp.output_text
+    try:
         j = json.loads(data)
     except Exception:
-        raise HTTPException(status_code=502, detail=f"OpenAI returned non-JSON: {data[:200]}")
+        raise HTTPException(status_code=502, detail=f"OpenAI returned non-JSON: {data[:300]}")
 
     return MatchResponse(**j)
-
 
 
 
