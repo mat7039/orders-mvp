@@ -1,22 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 function getApiBase() {
-  // 1) jeśli jednak masz NEXT_PUBLIC_API_URL i działa – użyj
   const envApi = process.env.NEXT_PUBLIC_API_URL;
   if (envApi && envApi.startsWith("http")) return envApi;
 
-  // 2) runtime fallback: ten sam host co UI, ale port API
   if (typeof window !== "undefined") {
     const { protocol, hostname } = window.location;
     return `${protocol}//${hostname}:40098`;
   }
 
-  // SSR fallback (nie powinno być użyte)
   return "http://localhost:8000";
 }
 
 const API = getApiBase();
-
 
 function normChar(ch) {
   const map = {
@@ -31,27 +27,7 @@ function normChar(ch) {
   return map[ch] || ch;
 }
 
-function normalizeText(s) {
-  if (!s) return "";
-  return s
-    .split("")
-    .map(normChar)
-    .join("")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-/**
- * Buduje:
- * - normStr: znormalizowany string (lower, single spaces)
- * - map: normIndex -> spanIdx
- * MVP: highlightujemy całe spany, nie dokładny zakres znaków.
- */
-const STOP_TOKENS = new Set([
-  "pcs", "pc", "eur", "pln", "net", "gross", "qty", "szt", "kg", "mm", "cm", "m",
-]);
-
+// Normalizacja do porównań (anchor match)
 function normalizeForSearch(s) {
   if (!s) return "";
   return s
@@ -59,79 +35,8 @@ function normalizeForSearch(s) {
     .map(normChar)
     .join("")
     .toLowerCase()
-    .replace(/\u00ad/g, "")   // soft hyphen
-    .replace(/\s+/g, "");     // usuń WSZYSTKIE spacje/enter
-}
-
-function tokenWeight(t) {
-  const hasDigit = /\d/.test(t);
-  const hasDash = t.includes("-");
-  if (hasDigit && hasDash) return 3;
-  if (hasDigit) return 2;
-  return 1;
-}
-
-function quoteTokens(quote) {
-  const raw = (quote || "")
-    .toLowerCase()
-    .replace(/\u00ad/g, "");
-
-  // tokeny typu 51139009-03, 0187-200-599, plate, stiffener
-  const tokens = raw.match(/[a-z0-9]+(?:-[a-z0-9]+)*/g) || [];
-
-  const seen = new Set();
-  const uniq = [];
-  for (const t of tokens) {
-    if (t.length < 3) continue;
-    if (STOP_TOKENS.has(t)) continue;
-    if (!seen.has(t)) {
-      seen.add(t);
-      uniq.push(t);
-    }
-  }
-
-  // priorytet: kody/numery
-  uniq.sort((a, b) => tokenWeight(b) - tokenWeight(a));
-
-  // limit żeby nie skanować 1000 tokenów
-  return uniq.slice(0, 12);
-}
-
-function buildNormalizedWithSpanMap(spanTexts) {
-  let norm = "";
-  const map = []; // norm char index -> spanIdx
-  let prevWasSpace = true;
-
-  for (let i = 0; i < spanTexts.length; i++) {
-    const raw = spanTexts[i] || "";
-    for (let j = 0; j < raw.length; j++) {
-      let ch = normChar(raw[j]).toLowerCase();
-      const isSpace = /\s/.test(ch);
-
-      if (isSpace) {
-        if (!prevWasSpace) {
-          norm += " ";
-          map.push(i);
-          prevWasSpace = true;
-        }
-      } else {
-        norm += ch;
-        map.push(i);
-        prevWasSpace = false;
-      }
-    }
-    // separator między spanami
-    if (!prevWasSpace) {
-      norm += " ";
-      map.push(i);
-      prevWasSpace = true;
-    }
-  }
-
-  norm = norm.trimEnd();
-  while (map.length > norm.length) map.pop();
-
-  return { normStr: norm, map };
+    .replace(/\u00ad/g, "") // soft hyphen
+    .replace(/\s+/g, ""); // usuń whitespace
 }
 
 export default function Home() {
@@ -151,25 +56,30 @@ export default function Home() {
 
   const [pdfDoc, setPdfDoc] = useState(null);
   const [pageNumber, setPageNumber] = useState(1);
-  const [highlightSpanIndexes, setHighlightSpanIndexes] = useState([]);
+
+  // GPT zwraca anchors do highlight
+  const [highlightTokens, setHighlightTokens] = useState([]);
   const [pdfMessage, setPdfMessage] = useState("");
 
   const canvasRef = useRef(null);
   const textLayerRef = useRef(null);
 
-  // pdf.js ładowany dynamicznie (żeby next build nie wywalał SSR)
+  // pdf.js (legacy) ładowany dynamicznie (żeby Next SSR nie wywalał)
   const pdfjsRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
+
     (async () => {
       if (typeof window === "undefined") return;
+
       const mod = await import("pdfjs-dist/legacy/build/pdf");
       if (cancelled) return;
 
-mod.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
+      // worker hostowany lokalnie (public/pdf.worker.min.js)
+      mod.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.js";
 
-pdfjsRef.current = mod;
+      pdfjsRef.current = mod;
     })().catch((e) => {
       console.error("Failed to load pdfjs", e);
       setPdfMessage("Nie udało się załadować pdf.js (sprawdź logi przeglądarki).");
@@ -237,230 +147,184 @@ pdfjsRef.current = mod;
     return null;
   }
 
-async function onSelect(row) {
-  setSelected(row);
-  setPdfMessage("");
-  setHighlightSpanIndexes([]);
-  setPageNumber(1);
-  setPdfDoc(null);
-
-  const pdfjsLib = pdfjsRef.current;
-  if (!pdfjsLib) {
-    setPdfMessage("PDF.js jeszcze się ładuje — spróbuj ponownie za sekundę.");
-    return;
-  }
-
-  const oneDriveId = pickField(row, ["onedriveId", "onedrive_id", "OneDriveId"]);
-  const pdfUrl = pickField(row, ["pdfWebUrl", "pdf_web_url", "pdfUrl", "PDF_URL"]);
-  const quote = pickField(row, ["sourceQuote", "source_quote", "SourceQuote", "SOURCEQUOTE"]);
-
-  // <<< TO jest kluczowe: proxied musi być zadeklarowane tutaj >>>
-  let proxied = null;
-
-  if (oneDriveId) {
-    // dodaj url jako fallback dla /shares jeśli jest dostępny
-    if (pdfUrl) {
-      proxied = `${API}/pdf?id=${encodeURIComponent(oneDriveId)}&url=${encodeURIComponent(pdfUrl)}`;
-    } else {
-      proxied = `${API}/pdf?id=${encodeURIComponent(oneDriveId)}`;
-    }
-  } else if (pdfUrl) {
-    proxied = `${API}/pdf?url=${encodeURIComponent(pdfUrl)}`;
-  } else {
-    setPdfMessage("Brak onedriveId i brak URL do PDF w rekordzie.");
-    return;
-  }
-
-  setLoadingPdf(true);
-  try {
-    const doc = await pdfjsLib
-      .getDocument({
-        url: proxied,
-        disableRange: false,
-        disableStream: false,
-
-      })
-      .promise;
-
-    setPdfDoc(doc);
-
-const maxPages = Math.min(doc.numPages, meta?.pdf_max_pages_scan || 50);
-
-const tokens = quoteTokens(quote);
-if (tokens.length === 0) {
-  setPdfMessage("sourceQuote jest puste lub nie daje tokenów — pokazuję PDF bez highlight.");
-  setPageNumber(1);
-  return;
-}
-
-let bestPage = 1;
-let bestScore = -1;
-let bestHits = [];
-
-for (let p = 1; p <= maxPages; p++) {
-  const page = await doc.getPage(p);
-  const textContent = await page.getTextContent();
-  const spans = textContent.items.map((it) => it.str || "");
-  const joined = normalizeForSearch(spans.join(" "));
-
-  let score = 0;
-  const hits = [];
-
-  for (const t of tokens) {
-    const nt = normalizeForSearch(t);
-    if (!nt) continue;
-    if (joined.includes(nt)) {
-      score += tokenWeight(t);
-      hits.push(t);
-    }
-  }
-
-  if (score > bestScore) {
-    bestScore = score;
-    bestPage = p;
-    bestHits = hits;
-  }
-
-  // szybki exit: jeśli trafiliśmy mocno (np. kod + jeszcze coś), nie ma sensu lecieć dalej
-  if (bestScore >= 6) break;
-}
-
-// próg dopasowania (tuning MVP)
-if (bestScore < 4) {
-  setPdfMessage(`Nie znaleziono dopasowania (tokeny) w limicie ${maxPages} stron. Najlepszy score=${bestScore} na stronie ${bestPage}.`);
-  setPageNumber(1);
-  return;
-}
-
-// ustaw stronę
-setPageNumber(bestPage);
-setPdfMessage(`Dopasowanie po tokenach na stronie ${bestPage} (score=${bestScore}): ${bestHits.join(", ")}`);
-
-// zbuduj highlight spanów na tej stronie
-{
-  const page = await doc.getPage(bestPage);
-  const textContent = await page.getTextContent();
-  const spans = textContent.items.map((it) => it.str || "");
-
-  const wanted = bestHits
-    .map((t) => normalizeForSearch(t))
-    .filter(Boolean);
-
-  const spanSet = new Set();
-  for (let i = 0; i < spans.length; i++) {
-    const ns = normalizeForSearch(spans[i]);
-    if (!ns) continue;
-    for (const w of wanted) {
-      if (ns.includes(w)) {
-        spanSet.add(i);
-        break;
-      }
-    }
-  }
-
-  setHighlightSpanIndexes([...spanSet]);
-}
-
-
-    if (!found) {
-      setPdfMessage(`Nie znaleziono cytatu w limicie ${meta?.pdf_max_pages_scan || 50} stron.`);
-      setPageNumber(1);
-    }
-  } catch (e) {
-    console.error(e);
-    setPdfMessage("Nie udało się załadować PDF (pdf.js/proxy/format). Sprawdź konsolę.");
-  } finally {
-    setLoadingPdf(false);
-  }
-}
-
-
-
-  async function renderPage() {
-  try {
-    console.log("renderPage()", {
-      hasPdfDoc: !!pdfDoc,
-      pageNumber,
-      highlights: highlightSpanIndexes.length,
-    });
-
-    if (!pdfDoc) return;
+  async function onSelect(row) {
+    setSelected(row);
+    setPdfMessage("");
+    setHighlightTokens([]);
+    setPageNumber(1);
+    setPdfDoc(null);
 
     const pdfjsLib = pdfjsRef.current;
     if (!pdfjsLib) {
-      console.warn("renderPage: pdfjsRef.current is null");
-      setPdfMessage("pdf.js nie jest jeszcze gotowy.");
+      setPdfMessage("PDF.js jeszcze się ładuje — spróbuj ponownie za sekundę.");
       return;
     }
 
-    const canvas = canvasRef.current;
-    const textLayerDiv = textLayerRef.current;
+    const oneDriveId = pickField(row, ["onedriveId", "onedrive_id", "OneDriveId"]);
+    const pdfUrl = pickField(row, ["pdfWebUrl", "pdf_web_url", "pdfUrl", "PDF_URL"]);
+    const quote = pickField(row, ["sourceQuote", "source_quote", "SourceQuote", "SOURCEQUOTE"]);
 
-    if (!canvas || !textLayerDiv) {
-      console.warn("renderPage: missing canvas/textLayer refs", { canvas, textLayerDiv });
-      setPdfMessage("Brak canvas/textLayer (ref).");
+    let proxied = null;
+    if (oneDriveId) {
+      // url jako fallback dla /shares
+      if (pdfUrl) proxied = `${API}/pdf?id=${encodeURIComponent(oneDriveId)}&url=${encodeURIComponent(pdfUrl)}`;
+      else proxied = `${API}/pdf?id=${encodeURIComponent(oneDriveId)}`;
+    } else if (pdfUrl) {
+      // legacy URL mode
+      proxied = `${API}/pdf?url=${encodeURIComponent(pdfUrl)}`;
+    } else {
+      setPdfMessage("Brak onedriveId i brak URL do PDF w rekordzie.");
       return;
     }
 
-    const page = await pdfDoc.getPage(pageNumber);
-    const scale = 1.35;
-const viewport = page.getViewport({ scale });
+    setLoadingPdf(true);
+    try {
+      // 1) załaduj PDF do viewer
+      const doc = await pdfjsLib
+        .getDocument({
+          url: proxied,
+          disableRange: false,
+          disableStream: false,
+        })
+        .promise;
 
-const outputScale = (typeof window !== "undefined" && window.devicePixelRatio) ? window.devicePixelRatio : 1;
+      setPdfDoc(doc);
 
-const ctx = canvas.getContext("2d");
-canvas.width = Math.floor(viewport.width * outputScale);
-canvas.height = Math.floor(viewport.height * outputScale);
+      // 2) jeśli mamy OneDriveId i quote -> poproś GPT o stronę + anchors
+      if (oneDriveId && quote) {
+        try {
+          const mr = await fetch(`${API}/match_pdf`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              id: oneDriveId,
+              url: pdfUrl || null,
+              sourceQuote: quote || "",
+            }),
+          });
 
-canvas.style.width = `${viewport.width}px`;
-canvas.style.height = `${viewport.height}px`;
+          if (!mr.ok) {
+            const t = await mr.text();
+            setPdfMessage(`match_pdf failed: HTTP ${mr.status} ${t.slice(0, 300)}`);
+            setPageNumber(1);
+            setHighlightTokens([]);
+            return;
+          }
 
-ctx.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+          const mj = await mr.json();
+          setPageNumber(mj.page || 1);
+          setHighlightTokens(mj.anchors || []);
+          setPdfMessage(`GPT match: strona ${mj.page} (conf=${mj.confidence}). ${mj.reason}`);
+        } catch (e) {
+          console.error(e);
+          setPdfMessage("Nie udało się dopasować cytatu przez GPT (sprawdź logi).");
+          setPageNumber(1);
+          setHighlightTokens([]);
+        }
+      } else {
+        // brak quote albo brak id
+        setPdfMessage(!quote ? "Brak sourceQuote — pokazuję PDF bez podświetlenia." : "Brak onedriveId — bez GPT match.");
+        setPageNumber(1);
+        setHighlightTokens([]);
+      }
+    } catch (e) {
+      console.error(e);
+      setPdfMessage("Nie udało się załadować PDF (pdf.js/proxy/format). Sprawdź konsolę.");
+    } finally {
+      setLoadingPdf(false);
+    }
+  }
 
-await page.render({ canvasContext: ctx, viewport }).promise;
+  async function renderPage() {
+    try {
+      console.log("renderPage()", {
+        hasPdfDoc: !!pdfDoc,
+        pageNumber,
+        highlights: highlightTokens.length,
+      });
 
+      if (!pdfDoc) return;
 
-    const textContent = await page.getTextContent();
-
-    textContent.items.forEach((item, idx) => {
-      const span = document.createElement("span");
-      span.textContent = item.str || "";
-      span.style.color = "transparent";
-      span.style.webkitTextFillColor = "transparent";
-      span.style.textShadow = "none";
-      span.style.pointerEvents = "none";
-      span.style.lineHeight = "1";
-      span.style.position = "absolute";
-      span.style.whiteSpace = "pre";
-
-      const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
-      const x = tx[4];
-      const y = tx[5];
-      const fontHeight = Math.hypot(tx[2], tx[3]);
-
-      span.style.left = `${x}px`;
-      span.style.top = `${y - fontHeight}px`;
-      span.style.fontSize = `${fontHeight}px`;
-      span.style.transformOrigin = "0 0";
-
-      if (highlightSpanIndexes.includes(idx)) {
-        span.style.background = "rgba(255,255,0,0.6)";
-
+      const pdfjsLib = pdfjsRef.current;
+      if (!pdfjsLib) {
+        console.warn("renderPage: pdfjsRef.current is null");
+        return;
       }
 
-      textLayerDiv.appendChild(span);
-    });
-  } catch (e) {
-    console.error("renderPage failed", e);
-    setPdfMessage("renderPage failed: " + (e?.message || String(e)));
-  }
-}
+      const wanted = (highlightTokens || []).map(normalizeForSearch).filter(Boolean);
 
+      const canvas = canvasRef.current;
+      const textLayerDiv = textLayerRef.current;
+      if (!canvas || !textLayerDiv) return;
+
+      const page = await pdfDoc.getPage(pageNumber);
+
+      // hiDPI canvas render
+      const scale = 1.35;
+      const viewport = page.getViewport({ scale });
+      const outputScale =
+        typeof window !== "undefined" && window.devicePixelRatio ? window.devicePixelRatio : 1;
+
+      const ctx = canvas.getContext("2d");
+      canvas.width = Math.floor(viewport.width * outputScale);
+      canvas.height = Math.floor(viewport.height * outputScale);
+      canvas.style.width = `${viewport.width}px`;
+      canvas.style.height = `${viewport.height}px`;
+      ctx.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+
+      // reset text layer
+      textLayerDiv.innerHTML = "";
+      textLayerDiv.style.position = "absolute";
+      textLayerDiv.style.left = "0";
+      textLayerDiv.style.top = "0";
+      textLayerDiv.style.width = `${viewport.width}px`;
+      textLayerDiv.style.height = `${viewport.height}px`;
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+
+      // text layer (tylko do highlight, tekst niewidoczny)
+      const textContent = await page.getTextContent();
+
+      textContent.items.forEach((item) => {
+        const span = document.createElement("span");
+        span.textContent = item.str || "";
+        span.style.position = "absolute";
+        span.style.whiteSpace = "pre";
+
+        // ukryj tekst żeby nie dublował canvasa (koniec "rozmazania")
+        span.style.color = "transparent";
+        span.style.webkitTextFillColor = "transparent";
+        span.style.textShadow = "none";
+        span.style.pointerEvents = "none";
+        span.style.lineHeight = "1";
+
+        const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+        const x = tx[4];
+        const y = tx[5];
+        const fontHeight = Math.hypot(tx[2], tx[3]);
+
+        span.style.left = `${x}px`;
+        span.style.top = `${y - fontHeight}px`;
+        span.style.fontSize = `${fontHeight}px`;
+
+        const ns = normalizeForSearch(item.str || "");
+        const isHit = wanted.length > 0 && wanted.some((w) => ns.includes(w));
+        if (isHit) {
+          span.style.background = "rgba(255,255,0,0.6)";
+        }
+
+        textLayerDiv.appendChild(span);
+      });
+    } catch (e) {
+      console.error("renderPage failed", e);
+      setPdfMessage("renderPage failed: " + (e?.message || String(e)));
+    }
+  }
 
   useEffect(() => {
     renderPage().catch((e) => console.error(e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pdfDoc, pageNumber, highlightSpanIndexes]);
+  }, [pdfDoc, pageNumber, highlightTokens]);
 
   const selectedId = selected ? selected[pk] : null;
 
@@ -470,8 +334,9 @@ await page.render({ canvasContext: ctx, viewport }).promise;
       <div style={{ width: "45%", borderRight: "1px solid #ddd", padding: 12, overflow: "auto" }}>
         <h2 style={{ marginTop: 0 }}>Orders MVP</h2>
         <div style={{ fontSize: 12, color: "#666", marginBottom: 8 }}>
-  API: <b>{API}</b>
-</div>
+          API: <b>{API}</b>
+        </div>
+
         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
           <select
             value={statusFilter}
@@ -522,6 +387,7 @@ await page.render({ canvasContext: ctx, viewport }).promise;
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>sourceQuote</th>
             </tr>
           </thead>
+
           <tbody>
             {items.map((row) => {
               const id = row[pk];
@@ -542,9 +408,8 @@ await page.render({ canvasContext: ctx, viewport }).promise;
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{klient}</td>
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6, maxWidth: 220 }}>
                     <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-  {quoteText}
-</div>
-
+                      {quoteText}
+                    </div>
                   </td>
                 </tr>
               );
