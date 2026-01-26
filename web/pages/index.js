@@ -595,11 +595,30 @@ background: isSel ? "#f3f6ff" : "transparent",
   )}
 </div>
             <details style={{ marginBottom: 10 }}>
-              <summary>JSON rekordu</summary>
-              <pre style={{ fontSize: 12, background: "#fafafa", padding: 10, border: "1px solid #eee" }}>
-                {JSON.stringify(selected, null, 2)}
-              </pre>
-            </details>
+  <summary>Szczegóły pozycji</summary>
+
+  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 10 }}>
+    <tbody>
+      {[
+        ["Pozycja", selected?.Pozycja ?? selected?.pozycja ?? ""],
+        ["Status", selected?.Status ?? selected?.status ?? ""],
+        ["Klient", selected?.Klient ?? selected?.klient ?? ""],
+        ["NaszIndeks", selected?.FinalIndeks ?? selected?.finalIndeks ?? ""],
+        ["NazwaKlienta", selected?.NazwaKlienta ?? selected?.nazwaKlienta ?? ""],
+        ["IloscKlienta", selected?.IloscKlienta ?? selected?.iloscKlienta ?? ""],
+        ["CenaOfertowa", selected?.CenaOfertowa ?? selected?.cenaOfertowa ?? ""],
+        ["pdfFileName", selected?.pdfFileName ?? selected?.PdfFileName ?? ""],
+      ].map(([label, value]) => (
+        <tr key={label}>
+          <td style={{ width: 180, padding: 6, borderBottom: "1px solid #eee", color: "#666" }}>{label}</td>
+          <td style={{ padding: 6, borderBottom: "1px solid #eee" }}>
+            {value === null || value === undefined || value === "" ? <span style={{ color: "#999" }}>—</span> : String(value)}
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</details>
 
             <div style={{ marginBottom: 8, display: "flex", gap: 8, alignItems: "center" }}>
               <button onClick={() => setPageNumber((p) => Math.max(1, p - 1))}>Poprzednia strona</button>
