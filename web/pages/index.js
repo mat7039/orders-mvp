@@ -334,7 +334,26 @@ async function saveEdits() {
     "(brak pdfFileName)"
   );
 }
+const dupPosMap = useMemo(() => {
+  // Map<pdfName, Map<pozycja, count>>
+  const m = new Map();
 
+  for (const r of items) {
+    const pdfName = getPdfName(r);
+    const status = (r.Status ?? r.status ?? "").toString().toLowerCase();
+    if (status === "rejected") continue; // liczymy tylko nie-odrzucone
+
+    const pos = r.Pozycja ?? r.pozycja ?? "";
+    const keyPos = String(pos).trim();
+    if (!keyPos) continue;
+
+    if (!m.has(pdfName)) m.set(pdfName, new Map());
+    const inner = m.get(pdfName);
+    inner.set(keyPos, (inner.get(keyPos) ?? 0) + 1);
+  }
+
+  return m;
+}, [items]);
 const grouped = useMemo(() => {
   // Map<pdfName, rows[]>
   const m = new Map();
@@ -466,9 +485,20 @@ const naszIndeks = row.FinalIndeks ?? row.finalIndeks ?? "";
 const nazwaKlienta = row.NazwaKlienta ?? row.nazwaKlienta ?? "";
 const iloscKlienta = row.IloscKlienta ?? row.iloscKlienta ?? "";
 const cenaOfertowa = row.CenaOfertowa ?? row.cenaOfertowa ?? "";
+const oferta = row.oferta ?? row.oferta ?? "";
+const DataUtworzenia = row.DataUtworzenia ?? row.DataUtworzenia ?? "";
+const DataWaznosci = row.DataWaznosci ?? row.DataWaznosci ?? "";
+  const IloscZOferty = row.IloscZOferty ?? row.IloscZOferty ?? "";
 
 
 const isSel = selectedId === id;
+  const pdfKey = pdfName; // w tym miejscu pdfName masz z pętli grupy
+const posKey = String(pozycja ?? "").trim();
+const st = (status ?? "").toString().toLowerCase();
+const isDup =
+  st !== "rejected" &&
+  posKey &&
+  (dupPosMap.get(pdfKey)?.get(posKey) ?? 0) > 1;
 
 
 return (
@@ -481,8 +511,9 @@ setOpenGroups((p) => ({ ...p, [pdfName]: true }));
 onSelect(row);
 }}
 style={{
-cursor: "pointer",
-background: isSel ? "#f3f6ff" : "transparent",
+  cursor: "pointer",
+  background: isSel ? "#f3f6ff" : isDup ? "#ffe5e5" : "transparent",
+  borderLeft: isDup ? "4px solid crimson" : "4px solid transparent",
 }}
 >
 <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{pozycja}</td>
