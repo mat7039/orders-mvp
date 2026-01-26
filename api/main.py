@@ -6,7 +6,7 @@ import io
 import json
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
-
+from pydantic import BaseModel
 import pyodbc
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -106,6 +106,17 @@ def row_to_dict(cursor, row) -> Dict[str, Any]:
     columns = [col[0] for col in cursor.description]
     return {columns[i]: row[i] for i in range(len(columns))}
 
+# --------------------------
+# Update model (PATCH /orders/{id})
+# --------------------------
+class OrderUpdateRequest(BaseModel):
+    Klient: Optional[str] = None
+    FinalIndeks: Optional[str] = None
+    NazwaKlienta: Optional[str] = None
+    IloscKlienta: Optional[float] = None
+    CenaOfertowa: Optional[float] = None
+    # Jeśli kiedyś chcesz:
+    # OfertaWaluta: Optional[str] = None
 
 def validate_config_columns(existing_cols: List[str]) -> Dict[str, bool]:
     s = set(existing_cols)
@@ -312,6 +323,65 @@ def set_status(id: int, status: str = Query(..., pattern="^(new|confirmed|reject
 
     return {"ok": True, "id": id, "status": status}
 
+@app.patch("/orders/{id}")
+def patch_order(id: int, payload: OrderUpdateRequest):
+    cols = fetch_table_columns()
+    s = set(cols)
+
+    # PK musi istnieć
+    if MSSQL_PK not in s:
+        raise HTTPException(status_code=500, detail=f"PK column '{MSSQL_PK}' not found in table")
+
+    table_sql = safe_table(MSSQL_TABLE)
+    pk_sql = safe_ident(MSSQL_PK)
+
+    # Whitelist pól, które wolno edytować z UI
+    allowed = ["Klient", "FinalIndeks", "NazwaKlienta", "IloscKlienta", "CenaOfertowa"]
+    # Jeśli kiedyś: allowed.append("OfertaWaluta")
+
+    # Pydantic v1/v2 kompatybilnie:
+    if hasattr(payload, "model_dump"):
+        data = payload.model_dump(exclude_unset=True)
+    else:
+        data = payload.dict(exclude_unset=True)
+
+    if not data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    # tylko dozwolone pola
+    data = {k: v for k, v in data.items() if k in allowed}
+
+    if not data:
+        raise HTTPException(status_code=400, detail="No allowed fields to update")
+
+    # sprawdź czy kolumny istnieją w tabeli (żeby nic się nie wywaliło)
+    missing = [k for k in data.keys() if k not in s]
+    if missing:
+        raise HTTPException(status_code=500, detail=f"Missing columns in table: {missing}")
+
+    sets = []
+    params: List[Any] = []
+    for k, v in data.items():
+        sets.append(f"{safe_ident(k)} = ?")
+        params.append(v)
+
+    sql = f"UPDATE {table_sql} SET " + ", ".join(sets) + f" WHERE {pk_sql} = ?;"
+    params.append(id)
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        conn.commit()
+
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Not found")
+
+        # zwróć zaktualizowany rekord (UI od razu widzi zmiany)
+        cur.execute(f"SELECT * FROM {table_sql} WHERE {pk_sql} = ?;", (id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Not found after update")
+        return row_to_dict(cur, row)
 
 # --------------------------
 # Microsoft Graph helpers
