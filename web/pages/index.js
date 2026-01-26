@@ -31,7 +31,7 @@ export default function Home() {
 
   const [pdfDoc, setPdfDoc] = useState(null);
   const [pageNumber, setPageNumber] = useState(1);
-
+const [openGroups, setOpenGroups] = useState(() => ({}));
   const [pdfMessage, setPdfMessage] = useState("");
   const [editOpen, setEditOpen] = useState(false);
 const [editSaving, setEditSaving] = useState(false);
@@ -324,6 +324,39 @@ async function saveEdits() {
   }, [pdfDoc, pageNumber]);
 
   const selectedId = selected ? selected[pk] : null;
+  function getPdfName(row) {
+  // dostosuj fallbacki jeśli masz inne pole
+  return (
+    row.pdfFileName ??
+    row.PdfFileName ??
+    row.pdf_filename ??
+    row.pdf ??
+    "(brak pdfFileName)"
+  );
+}
+
+const grouped = useMemo(() => {
+  // Map<pdfName, rows[]>
+  const m = new Map();
+  for (const r of items) {
+    const key = getPdfName(r);
+    if (!m.has(key)) m.set(key, []);
+    m.get(key).push(r);
+  }
+
+  // jeżeli backend już sortuje po Klient/pdfFileName/Pozycja, to kolejność w mapie będzie OK.
+  // Jeśli chcesz dodatkowo sortować w obrębie grupy po Pozycja:
+  for (const [k, arr] of m.entries()) {
+    arr.sort((a, b) => {
+      const pa = a.Pozycja ?? a.pozycja ?? 0;
+      const pb = b.Pozycja ?? b.pozycja ?? 0;
+      return Number(pa) - Number(pb);
+    });
+    m.set(k, arr);
+  }
+
+  return Array.from(m.entries()); // [ [pdfName, rows[]], ... ]
+}, [items]);
 
   return (
     <div style={{ display: "flex", height: "100vh", fontFamily: "sans-serif" }}>
@@ -390,48 +423,86 @@ async function saveEdits() {
             </tr>
           </thead>
 
-          <tbody>
-            {items.map((row) => {
-              const id = row[pk]; // nadal do logiki
-              const pozycja = row.Pozycja ?? row.pozycja ?? "";
+<tbody>
+{grouped.map(([pdfName, rows]) => {
+const isOpen = openGroups[pdfName] ?? true; // domyślnie otwarte
 
-              const status = row.Status ?? row.status ?? "";
-              const klient = row.Klient ?? row.klient ?? "";
 
-              // FinalIndeks wyświetlamy jako "NaszIndeks"
-              const naszIndeks = row.FinalIndeks ?? row.finalIndeks ?? "";
+return (
+<React.Fragment key={pdfName}>
+{/* Wiersz-nagłówek grupy */}
+<tr
+onClick={() => setOpenGroups((p) => ({ ...p, [pdfName]: true }))}
+style={{
+cursor: "pointer",
+background: "#f7f7f7",
+borderTop: "1px solid #eee",
+}}
+>
+<td style={{ padding: 6, borderBottom: "1px solid #eee" }} colSpan={7}>
+<span style={{ display: "inline-block", width: 18 }}>
+{isOpen ? "▾" : "▸"}
+</span>
+<b>{pdfName}</b>
+<span style={{ marginLeft: 10, color: "#666", fontSize: 12 }}>
+({rows.length} pozycji)
+</span>
+</td>
+</tr>
 
-              const nazwaKlienta = row.NazwaKlienta ?? row.nazwaKlienta ?? "";
-              const iloscKlienta = row.IloscKlienta ?? row.iloscKlienta ?? "";
 
-              // jeśli później chcesz "Cena Waluta" to tutaj to składasz
-              const cenaOfertowa = row.CenaOfertowa ?? row.cenaOfertowa ?? "";
+{/* Pozycje w grupie */}
+{isOpen &&
+rows.map((row) => {
+const id = row[pk];
+const pozycja = row.Pozycja ?? row.pozycja ?? "";
+const status = row.Status ?? row.status ?? "";
+const klient = row.Klient ?? row.klient ?? "";
+const naszIndeks = row.FinalIndeks ?? row.finalIndeks ?? "";
+const nazwaKlienta = row.NazwaKlienta ?? row.nazwaKlienta ?? "";
+const iloscKlienta = row.IloscKlienta ?? row.iloscKlienta ?? "";
+const cenaOfertowa = row.CenaOfertowa ?? row.cenaOfertowa ?? "";
 
-              const isSel = selectedId === id;
 
-              return (
-                <tr
-                  key={id}
-                  onClick={() => onSelect(row)}
-                  style={{ cursor: "pointer", background: isSel ? "#f3f6ff" : "transparent" }}
-                >
-                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{pozycja}</td>
-                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{status}</td>
-                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{klient}</td>
-                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{naszIndeks}</td>
+const isSel = selectedId === id;
 
-                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6, maxWidth: 220 }}>
-                    <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {nazwaKlienta}
-                    </div>
-                  </td>
 
-                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{iloscKlienta}</td>
-                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{cenaOfertowa}</td>
-                </tr>
-              );
-            })}
-          </tbody>
+return (
+<tr
+key={id}
+onClick={(e) => {
+e.stopPropagation(); // żeby klik w pozycję nie zwijał grupy
+// upewnij się, że grupa jest otwarta
+setOpenGroups((p) => ({ ...p, [pdfName]: true }));
+onSelect(row);
+}}
+style={{
+cursor: "pointer",
+background: isSel ? "#f3f6ff" : "transparent",
+}}
+>
+<td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{pozycja}</td>
+<td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{status}</td>
+<td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{klient}</td>
+<td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{naszIndeks}</td>
+
+
+<td style={{ borderBottom: "1px solid #f3f3f3", padding: 6, maxWidth: 220 }}>
+<div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+{nazwaKlienta}
+</div>
+</td>
+
+
+<td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{iloscKlienta}</td>
+<td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{cenaOfertowa}</td>
+</tr>
+);
+})}
+</React.Fragment>
+);
+})}
+</tbody>
         </table>
       </div>
 
