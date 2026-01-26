@@ -39,6 +39,32 @@ export default function Home() {
   // pdf.js (legacy) ładowany dynamicznie (żeby Next SSR nie wywalał)
   const pdfjsRef = useRef(null);
 
+  // =========================
+  // PDF CACHE (tu dodane)
+  // =========================
+  // cache: key -> { doc, lastUsed }
+  const pdfCacheRef = useRef(new Map());
+  const MAX_PDF_CACHE = 5;
+
+  function prunePdfCache() {
+    const cache = pdfCacheRef.current;
+    if (cache.size <= MAX_PDF_CACHE) return;
+
+    let oldestKey = null;
+    let oldest = Infinity;
+
+    for (const [k, v] of cache.entries()) {
+      const t = v?.lastUsed ?? 0;
+      if (t < oldest) {
+        oldest = t;
+        oldestKey = k;
+      }
+    }
+
+    if (oldestKey) cache.delete(oldestKey);
+  }
+  // =========================
+
   useEffect(() => {
     let cancelled = false;
 
@@ -119,11 +145,23 @@ export default function Home() {
     return null;
   }
 
+  // =========================
+  // PDF CACHE KEY (tu dodane)
+  // =========================
+  function getPdfCacheKey(row) {
+    const oneDriveId = pickField(row, ["onedriveId", "onedrive_id", "OneDriveId"]);
+    const pdfUrl = pickField(row, ["pdfWebUrl", "pdf_web_url", "pdfUrl", "PDF_URL"]);
+    return oneDriveId ? `id:${oneDriveId}` : pdfUrl ? `url:${pdfUrl}` : null;
+  }
+  // =========================
+
+  // =========================
+  // onSelect z cache (już masz, tu wklejone w całości)
+  // =========================
   async function onSelect(row) {
     setSelected(row);
     setPdfMessage("");
     setPageNumber(1);
-    setPdfDoc(null);
 
     const pdfjsLib = pdfjsRef.current;
     if (!pdfjsLib) {
@@ -131,16 +169,30 @@ export default function Home() {
       return;
     }
 
+    const cacheKey = getPdfCacheKey(row);
+    if (!cacheKey) {
+      setPdfMessage("Brak onedriveId i brak URL do PDF w rekordzie.");
+      return;
+    }
+
+    // 1) HIT w cache -> natychmiast
+    const cached = pdfCacheRef.current.get(cacheKey);
+    if (cached?.doc) {
+      cached.lastUsed = Date.now();
+      setPdfDoc(cached.doc);
+      setPdfMessage("PDF z cache.");
+      return;
+    }
+
+    // 2) MISS -> pobierz jak dotąd
     const oneDriveId = pickField(row, ["onedriveId", "onedrive_id", "OneDriveId"]);
     const pdfUrl = pickField(row, ["pdfWebUrl", "pdf_web_url", "pdfUrl", "PDF_URL"]);
 
     let proxied = null;
     if (oneDriveId) {
-      // url jako fallback dla /shares
       if (pdfUrl) proxied = `${API}/pdf?id=${encodeURIComponent(oneDriveId)}&url=${encodeURIComponent(pdfUrl)}`;
       else proxied = `${API}/pdf?id=${encodeURIComponent(oneDriveId)}`;
     } else if (pdfUrl) {
-      // legacy URL mode
       proxied = `${API}/pdf?url=${encodeURIComponent(pdfUrl)}`;
     } else {
       setPdfMessage("Brak onedriveId i brak URL do PDF w rekordzie.");
@@ -157,9 +209,12 @@ export default function Home() {
         })
         .promise;
 
+      // zapisz do cache
+      pdfCacheRef.current.set(cacheKey, { doc, lastUsed: Date.now() });
+      prunePdfCache();
+
       setPdfDoc(doc);
-      setPdfMessage("PDF załadowany.");
-      setPageNumber(1);
+      setPdfMessage("PDF załadowany (cache zapisany).");
     } catch (e) {
       console.error(e);
       setPdfMessage("Nie udało się załadować PDF (pdf.js/proxy/format). Sprawdź konsolę.");
@@ -167,6 +222,7 @@ export default function Home() {
       setLoadingPdf(false);
     }
   }
+  // =========================
 
   async function renderPage() {
     try {
@@ -257,7 +313,9 @@ export default function Home() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr>
+              {/* dla usera pokazujesz Pozycja, a nie {pk} */}
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>Pozycja</th>
+
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>Status</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>Klient</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>NaszIndeks</th>
@@ -269,17 +327,20 @@ export default function Home() {
 
           <tbody>
             {items.map((row) => {
-              const id = row[pk];
+              const id = row[pk]; // nadal do logiki
               const pozycja = row.Pozycja ?? row.pozycja ?? "";
+
               const status = row.Status ?? row.status ?? "";
               const klient = row.Klient ?? row.klient ?? "";
 
-              const finalIndeks = row.FinalIndeks ?? row.finalIndeks ?? "";
+              // FinalIndeks wyświetlamy jako "NaszIndeks"
+              const naszIndeks = row.FinalIndeks ?? row.finalIndeks ?? "";
+
               const nazwaKlienta = row.NazwaKlienta ?? row.nazwaKlienta ?? "";
               const iloscKlienta = row.IloscKlienta ?? row.iloscKlienta ?? "";
-              const cena = row.CenaOfertowa ?? row.cenaOfertowa ?? "";
-              const waluta = row.OfertaWaluta ?? row.ofertaWaluta ?? "";
-              const cenaOfertowa = `${cena}${waluta ? " " + waluta : ""}`;
+
+              // jeśli później chcesz "Cena Waluta" to tutaj to składasz
+              const cenaOfertowa = row.CenaOfertowa ?? row.cenaOfertowa ?? "";
 
               const isSel = selectedId === id;
 
@@ -292,8 +353,7 @@ export default function Home() {
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{pozycja}</td>
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{status}</td>
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{klient}</td>
-
-                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{finalIndeks}</td>
+                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{naszIndeks}</td>
 
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6, maxWidth: 220 }}>
                     <div style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -302,7 +362,6 @@ export default function Home() {
                   </td>
 
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{iloscKlienta}</td>
-
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{cenaOfertowa}</td>
                 </tr>
               );
