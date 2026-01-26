@@ -425,7 +425,7 @@ const grouped = useMemo(() => {
 
 <tbody>
 {grouped.map(([pdfName, rows]) => {
-const isOpen = openGroups[pdfName] ?? true; // domyślnie otwarte
+const isOpen = openGroups[pdfName] ?? false; 
 
 
 return (
