@@ -276,7 +276,9 @@ export default function Home() {
               const finalIndeks = row.FinalIndeks ?? row.finalIndeks ?? "";
               const nazwaKlienta = row.NazwaKlienta ?? row.nazwaKlienta ?? "";
               const iloscKlienta = row.IloscKlienta ?? row.iloscKlienta ?? "";
-              const cenaOfertowa = row.CenaOfertowa ?? row.cenaOfertowa ?? "";
+              const cena = row.CenaOfertowa ?? row.cenaOfertowa ?? "";
+              const waluta = row.OfertaWaluta ?? row.ofertaWaluta ?? "";
+              const cenaOfertowa = `${cena}${waluta ? " " + waluta : ""}`;
 
               const isSel = selectedId === id;
 
