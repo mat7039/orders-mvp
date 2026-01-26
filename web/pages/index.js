@@ -33,7 +33,16 @@ export default function Home() {
   const [pageNumber, setPageNumber] = useState(1);
 
   const [pdfMessage, setPdfMessage] = useState("");
-
+  const [editOpen, setEditOpen] = useState(false);
+const [editSaving, setEditSaving] = useState(false);
+const [editError, setEditError] = useState("");
+const [editForm, setEditForm] = useState({
+  Klient: "",
+  FinalIndeks: "",
+  NazwaKlienta: "",
+  IloscKlienta: "",
+  CenaOfertowa: "",
+});
   const canvasRef = useRef(null);
 
   // pdf.js (legacy) ładowany dynamicznie (żeby Next SSR nie wywalał)
@@ -137,7 +146,54 @@ export default function Home() {
       setSelected({ ...selected, Status: status });
     }
   }
+async function saveEdits() {
+  if (!selected) return;
 
+  setEditSaving(true);
+  setEditError("");
+  try {
+    // zbuduj payload (tylko pola, które chcesz wysłać)
+    const payload = {
+      Klient: editForm.Klient,
+      FinalIndeks: editForm.FinalIndeks,
+      NazwaKlienta: editForm.NazwaKlienta,
+      // konwersje na liczbę jeśli chcesz:
+      IloscKlienta: editForm.IloscKlienta === "" ? null : Number(editForm.IloscKlienta),
+      CenaOfertowa: editForm.CenaOfertowa === "" ? null : Number(editForm.CenaOfertowa),
+    };
+
+    // usuń null-e żeby nie nadpisywać (opcjonalnie)
+    Object.keys(payload).forEach((k) => payload[k] === null && delete payload[k]);
+
+    const id = selected[pk];
+
+    const r = await fetch(`${API}/orders/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!r.ok) {
+      const t = await r.text().catch(() => "");
+      throw new Error(`PATCH failed: ${r.status} ${t}`);
+    }
+
+    const updated = await r.json();
+
+    // zaktualizuj selected
+    setSelected(updated);
+
+    // zaktualizuj listę w pamięci (żeby od razu było w tabeli po lewej)
+    setItems((prev) => prev.map((x) => (x[pk] === id ? updated : x)));
+
+    setEditOpen(false);
+  } catch (e) {
+    console.error(e);
+    setEditError(e?.message || String(e));
+  } finally {
+    setEditSaving(false);
+  }
+}
   function pickField(row, candidates) {
     for (const k of candidates) {
       if (row && row[k] !== undefined && row[k] !== null && row[k] !== "") return row[k];
@@ -162,7 +218,16 @@ export default function Home() {
     setSelected(row);
     setPdfMessage("");
     setPageNumber(1);
-
+    setEditOpen(false);
+    setEditError("");
+    setEditForm({
+  Klient: row.Klient ?? row.klient ?? "",
+  FinalIndeks: row.FinalIndeks ?? row.finalIndeks ?? "",
+  NazwaKlienta: row.NazwaKlienta ?? row.nazwaKlienta ?? "",
+  IloscKlienta: row.IloscKlienta ?? row.iloscKlienta ?? "",
+  CenaOfertowa: row.CenaOfertowa ?? row.cenaOfertowa ?? "",
+});
+    
     const pdfjsLib = pdfjsRef.current;
     if (!pdfjsLib) {
       setPdfMessage("PDF.js jeszcze się ładuje — spróbuj ponownie za sekundę.");
@@ -387,7 +452,73 @@ export default function Home() {
             </div>
 
             <div style={{ fontSize: 12, color: "#444", marginBottom: 10 }}>{pdfMessage}</div>
+            <div style={{ marginBottom: 10, padding: 10, border: "1px solid #eee", background: "#fafafa" }}>
+  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+    <button onClick={() => setEditOpen((v) => !v)}>
+      {editOpen ? "Zamknij edycję" : "Edytuj"}
+    </button>
+    {editSaving && <span style={{ fontSize: 12 }}>Zapisywanie...</span>}
+    {editError && <span style={{ fontSize: 12, color: "crimson" }}>{editError}</span>}
+  </div>
 
+  {editOpen && (
+    <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "160px 1fr", gap: 8 }}>
+      <div>Klient</div>
+      <input
+        value={editForm.Klient}
+        onChange={(e) => setEditForm((p) => ({ ...p, Klient: e.target.value }))}
+      />
+
+      <div>NaszIndeks</div>
+      <input
+        value={editForm.FinalIndeks}
+        onChange={(e) => setEditForm((p) => ({ ...p, FinalIndeks: e.target.value }))}
+      />
+
+      <div>NazwaKlienta</div>
+      <input
+        value={editForm.NazwaKlienta}
+        onChange={(e) => setEditForm((p) => ({ ...p, NazwaKlienta: e.target.value }))}
+      />
+
+      <div>IloscKlienta</div>
+      <input
+        value={editForm.IloscKlienta}
+        onChange={(e) => setEditForm((p) => ({ ...p, IloscKlienta: e.target.value }))}
+      />
+
+      <div>CenaOfertowa</div>
+      <input
+        value={editForm.CenaOfertowa}
+        onChange={(e) => setEditForm((p) => ({ ...p, CenaOfertowa: e.target.value }))}
+      />
+
+      <div />
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={saveEdits} disabled={editSaving}>
+          Zapisz
+        </button>
+        <button
+          onClick={() => {
+            // reset do wartości z selected
+            setEditError("");
+            setEditForm({
+              Klient: selected?.Klient ?? "",
+              FinalIndeks: selected?.FinalIndeks ?? "",
+              NazwaKlienta: selected?.NazwaKlienta ?? "",
+              IloscKlienta: selected?.IloscKlienta ?? "",
+              CenaOfertowa: selected?.CenaOfertowa ?? "",
+            });
+            setEditOpen(false);
+          }}
+          disabled={editSaving}
+        >
+          Anuluj
+        </button>
+      </div>
+    </div>
+  )}
+</div>
             <details style={{ marginBottom: 10 }}>
               <summary>JSON rekordu</summary>
               <pre style={{ fontSize: 12, background: "#fafafa", padding: 10, border: "1px solid #eee" }}>
