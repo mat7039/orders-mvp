@@ -12,7 +12,7 @@ services:
       # ---- MSSQL ----
       MSSQL_SERVER: "metrix-sql"
       MSSQL_PORT: "1433"
-      MSSQL_DB: "CDNXL_METRIXM"
+      MSSQL_DB: "ExcelToExcel"
       MSSQL_USER: "amada"
       MSSQL_PASSWORD: "${MSSQL_PASSWORD}"
       MSSQL_TABLE: "dbo.krakowiakZamowienian8n"
