@@ -257,7 +257,7 @@ export default function Home() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr>
-              <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>{pk}</th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>Pozycja</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>Status</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>Klient</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>NaszIndeks</th>
@@ -270,6 +270,7 @@ export default function Home() {
           <tbody>
             {items.map((row) => {
               const id = row[pk];
+              const pozycja = row.Pozycja ?? row.pozycja ?? "";
               const status = row.Status ?? row.status ?? "";
               const klient = row.Klient ?? row.klient ?? "";
 
@@ -288,7 +289,7 @@ export default function Home() {
                   onClick={() => onSelect(row)}
                   style={{ cursor: "pointer", background: isSel ? "#f3f6ff" : "transparent" }}
                 >
-                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{id}</td>
+                  <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{pozycja}</td>
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{status}</td>
                   <td style={{ borderBottom: "1px solid #f3f3f3", padding: 6 }}>{klient}</td>
 
