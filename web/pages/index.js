@@ -260,7 +260,7 @@ export default function Home() {
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>{pk}</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>Status</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>Klient</th>
-              <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>FinalIndeks</th>
+              <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>NaszIndeks</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>NazwaKlienta</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>IloscKlienta</th>
               <th style={{ textAlign: "left", borderBottom: "1px solid #eee", padding: 6 }}>CenaOfertowa</th>
