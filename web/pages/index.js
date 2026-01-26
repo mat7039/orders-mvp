@@ -38,6 +38,43 @@ function normalizeForSearch(s) {
     .replace(/\u00ad/g, "") // soft hyphen
     .replace(/\s+/g, ""); // usuń whitespace
 }
+function explodeAnchors(anchors) {
+  const out = [];
+  for (const a of anchors || []) {
+    if (!a) continue;
+
+    // 1) oryginał
+    out.push(a);
+
+    // 2) tokeny alnum/dash (np. 04000-2-36410 -> ["04000-2-36410"])
+    const toks = String(a).match(/[a-z0-9]+(?:-[a-z0-9]+)*/gi) || [];
+    for (const t of toks) out.push(t);
+
+    // 3) jeśli token kończy się cyframi (np. 04000-2-36410) -> dodaj też wersję bez końcowych cyfr + same końcowe cyfry
+    for (const t of toks) {
+      const m = t.match(/^(.+?)(\d{1,4})$/);
+      if (m) {
+        out.push(m[1]);
+        out.push(m[2]);
+      }
+    }
+  }
+
+  // uniq + filtr
+  const seen = new Set();
+  const uniq = [];
+  for (const x of out) {
+    const n = normalizeForSearch(x);
+    if (!n) continue;
+    if (n.length < 2) continue;
+    if (!seen.has(n)) {
+      seen.add(n);
+      uniq.push(x);
+    }
+  }
+  return uniq.slice(0, 40);
+}
+
 
 export default function Home() {
   const [meta, setMeta] = useState(null);
@@ -213,7 +250,7 @@ export default function Home() {
 
           const mj = await mr.json();
           setPageNumber(mj.page || 1);
-          setHighlightTokens(mj.anchors || []);
+          setHighlightTokens(explodeAnchors(mj.anchors || []));
           setPdfMessage(`GPT match: strona ${mj.page} (conf=${mj.confidence}). ${mj.reason}`);
         } catch (e) {
           console.error(e);
