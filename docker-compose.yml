@@ -61,7 +61,7 @@ services:
     ports:
       - "40099:80"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  - ./caddy:/etc/caddy:ro
     depends_on:
       - web
       - api
