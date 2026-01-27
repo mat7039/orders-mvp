@@ -509,7 +509,6 @@ const isSel = selectedId === id;
   "transparent";
   const pdfKey = pdfName; // w tym miejscu pdfName masz z pętli grupy
 const posKey = String(pozycja ?? "").trim();
-const st = (status ?? "").toString().toLowerCase();
 const isDup =
   st !== "rejected" &&
   posKey &&
