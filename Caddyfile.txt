@@ -1,0 +1,19 @@
+:80 {
+
+    # TYLKO LAN/VPN (domyślne prywatne zakresy)
+    @lan {
+        remote_ip 10.0.0.0/8 192.168.0.0/16 172.16.0.0/12
+    }
+
+    handle @lan {
+        handle_path /api/* {
+            reverse_proxy api:8000
+        }
+
+        reverse_proxy web:3000
+    }
+
+    handle {
+        respond "Dostęp tylko z sieci firmowej (LAN/VPN)" 403
+    }
+}
