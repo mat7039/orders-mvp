@@ -31,6 +31,7 @@ export default function Home() {
 
   const [pdfDoc, setPdfDoc] = useState(null);
   const [pageNumber, setPageNumber] = useState(1);
+  const lastPdfNameRef = useRef(null);
 const [openGroups, setOpenGroups] = useState(() => ({}));
   const [pdfMessage, setPdfMessage] = useState("");
   const [editOpen, setEditOpen] = useState(false);
@@ -217,7 +218,16 @@ async function saveEdits() {
   async function onSelect(row) {
     setSelected(row);
     setPdfMessage("");
-    setPageNumber(1);
+    const currentPdfName = getPdfName(row);
+const prevPdfName = lastPdfNameRef.current;
+
+// jeśli PDF inny niż poprzedni -> reset do 1
+if (currentPdfName !== prevPdfName) {
+  setPageNumber(1);
+}
+
+// zapamiętaj bieżący PDF jako "ostatni"
+lastPdfNameRef.current = currentPdfName;
     setEditOpen(false);
     setEditError("");
     setEditForm({
