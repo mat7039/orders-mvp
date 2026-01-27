@@ -1,8 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 function getApiBase() {
-  // API jest pod tym samym hostem co UI, tylko pod prefiksem /api
-  return "/api";
+  // w Next.js zmienne publiczne są dostępne w przeglądarce
+  const envApi = process.env.NEXT_PUBLIC_API_URL;
+  if (envApi) return envApi;
+
+  // fallback: ten sam host, /api
+  if (typeof window !== "undefined") return "/api";
+
+  return "http://localhost:8000";
 }
 
 const API = getApiBase();
