@@ -502,6 +502,11 @@ const DataWaznosci = row.DataWaznosci ?? row.DataWaznosci ?? "";
 
 
 const isSel = selectedId === id;
+  const st = (status ?? "").toString().toLowerCase();
+  const statusBg =
+  st === "rejected" ? "#f1f1f1" :
+  st === "confirmed" ? "#e9f7ee" :
+  "transparent";
   const pdfKey = pdfName; // w tym miejscu pdfName masz z pętli grupy
 const posKey = String(pozycja ?? "").trim();
 const st = (status ?? "").toString().toLowerCase();
@@ -522,7 +527,8 @@ onSelect(row);
 }}
 style={{
   cursor: "pointer",
-  background: isSel ? "#f3f6ff" : isDup ? "#ffe5e5" : "transparent",
+  background: isSel ? "#f3f6ff" : isDup ? "#ffe5e5" : statusBg,
+  color: st === "rejected" ? "#666" : "inherit",
   borderLeft: isDup ? "4px solid crimson" : "4px solid transparent",
 }}
 >
