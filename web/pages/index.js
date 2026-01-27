@@ -1,12 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 function getApiBase() {
-  // w Next.js zmienne publiczne są dostępne w przeglądarce
   const envApi = process.env.NEXT_PUBLIC_API_URL;
-  if (envApi) return envApi;
 
-  // fallback: ten sam host, /api
-  if (typeof window !== "undefined") return "/api";
+  if (envApi && envApi.startsWith("http")) {
+    return envApi;
+  }
+
+  if (typeof window !== "undefined") {
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:40098`;
+  }
 
   return "http://localhost:8000";
 }
