@@ -6,8 +6,8 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile
-    ports:
-      - "40098:8000"
+    expose:
+      - "8000"
     environment:
       # ---- MSSQL ----
       MSSQL_SERVER: "metrix-sql"
@@ -22,14 +22,14 @@ services:
       OPENAI_API_KEY: "${OPENAI_API_KEY}"
       OPENAI_MODEL: "gpt-5"
 
-      # ---- Kolumny biznesowe (domyślne) ----
+      # ---- Kolumny biznesowe ----
       SOURCEQUOTE_COLUMN: "sourceQuote"
       PDF_URL_COLUMN: "pdfWebUrl"
       STATUS_COLUMN: "Status"
       CLIENT_COLUMN: "Klient"
 
       # ---- API ----
-      CORS_ALLOW_ORIGINS: "*"
+      CORS_ALLOW_ORIGINS: "http://srv39.mikr.us:40099"
       PDF_MAX_PAGES_SCAN: "50"
 
       # ---- Microsoft Graph ----
@@ -39,17 +39,36 @@ services:
       MS_DRIVE_ID: "${MS_DRIVE_ID}"
 
     restart: unless-stopped
+    networks: [appnet]
 
   web:
     container_name: orders_web
     build:
       context: ./web
       dockerfile: Dockerfile
-    ports:
-      - "40099:3000"
+    expose:
+      - "3000"
     environment:
-      NEXT_PUBLIC_API_URL: "http://srv39.mikr.us:40098"
+      NEXT_PUBLIC_API_URL: "/api"
     depends_on:
       - api
     restart: unless-stopped
+    networks: [appnet]
+
+  caddy:
+    image: caddy:2
+    container_name: orders_caddy
+    ports:
+      - "40099:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - web
+      - api
+    restart: unless-stopped
+    networks: [appnet]
+
+networks:
+  appnet:
+    driver: bridge
 
